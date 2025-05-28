@@ -25,13 +25,6 @@ import QtQuick.Layouts
 import akaflieg_freiburg.enroute
 
 ColumnLayout {
-    anchors.left: parent.left
-    anchors.right: parent.right
-
-    anchors.bottomMargin: SafeInsets.bottom
-    anchors.leftMargin: SafeInsets.left
-    anchors.rightMargin: SafeInsets.right
-
     spacing: 0  // Set the spacing between children to 0
     SideView {
         Layout.fillWidth: true
