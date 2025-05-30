@@ -19,18 +19,19 @@
  ***************************************************************************/
 
 #include <QBrush>
-#include <QPainter>
+#include <QDebug>
 #include <QElapsedTimer>
 #include <QFont>
-#include <QDebug>
-#include <QPen>
-#include <QPainterStateGuard>
-#include <QPoint>
-#include <QRect>
-#include <QVector>
-#include <QtConcurrent>
+#include <QGraphicsTextItem>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QPainter>
+#include <QPainterStateGuard>
+#include <QPen>
+#include <QPoint>
+#include <QRect>
+#include <QtConcurrent>
+#include <QVector>
 #include <set>
 
 #include "GlobalObject.h"
@@ -49,8 +50,20 @@ Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
 {
+    qDebug() << "Painting";
     QElapsedTimer timer;
     timer.start();
+
+    // Collect information:
+    if (GlobalObject::navigator()->flightRoute() == nullptr) {
+        // TODO Show error message
+        qDebug() << "No route";
+        return;
+    } else {
+        route = GlobalObject::navigator()->flightRoute();
+    }
+
+    QPainterStateGuard guard(painter);
 
     // The Qt coordinate system starts at the top left corner, with
     // y pointing downwards.
@@ -59,33 +72,25 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     painter->scale(1, -1);
     painter->translate(0, -widgetHeight());
 
-    // Collect information:
-    if (GlobalObject::navigator()->flightRoute() == nullptr) {
-        // TODO Show error message
-        return;
-    } else {
-        route = GlobalObject::navigator()->flightRoute();
-    }
-
     drawSky(painter);
+    qDebug() << "Sky ok at " << timer.elapsed() << "ms";
 
     const auto navigator = GlobalObject::navigator();
     const auto route = navigator->flightRoute();
 
     drawTerrain(painter);
+    qDebug() << "Terrain ok at " << timer.elapsed() << "ms";
 
     const auto borders = intersectAirspaces();
     drawAirspaces(painter, borders);
 
-    // Draw airspace lower and upper bounds
-    // Airspace label
+    // Scale
     // Insert waypoints and waypoints along the way (?)
     // Plane symbol
     // Weather
     // Zoom + Move
     // Show related position on map
     // NOTAM
-    // Scala
 
     qDebug() << "Drawing took" << timer.elapsed() << "milliseconds"; //TODO Remove
 }
@@ -415,10 +420,14 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
     const int offsetWidth = 6;  // FIXME have this somewhere configurable.
     const int linewidth = 2;
 
+    QPainterStateGuard guard(painter);
+
+    QFont font("Roboto");
+    painter->setFont(font);
+
     const StyleManager styleManager;  // FIXME avoid costly relocation of this by using singletons.
     for (const auto& border : borders) {
         const auto& style = styleManager.getStyle(border._airspace.CAT());
-        QPainterStateGuard guard(painter);
 
         std::optional<QVector<QPoint>> entering;
         std::optional<QVector<QPoint>> leaving;
@@ -443,7 +452,7 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         // Fill the airspace:
         if (style._fillColor) {
             // No line:
-            painter->setPen(QColor("transparent"));
+            painter->setPen(QColorConstants::Transparent);
 
             // Specify background color:
             QColor clr = *style._fillColor;
@@ -461,6 +470,9 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
 
             // Draw the area:
             painter->drawPolygon(area);
+
+            // Reset the fill color:
+            painter->setBrush(QColorConstants::Transparent);
         }
 
         // Draw the inset outline:
@@ -492,13 +504,43 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
                     lO->append(QPoint(pt.x() - offsetWidth / 2, pt.y()));
             }
 
+            // Draw the offset outline:
             QColor clr = *style._offsetColor;
             clr.setAlphaF(style._offsetOpacity);
             drawAirspaceBorders(painter, clr, offsetWidth,
                 std::nullopt, bO, tO, eO, lO);
         }
 
-        // TODO label the airspace
+        // Label the airspace.
+        // For now, I will simply use the rectangle center,
+        // as calculating the polygon centroid is too expensive.
+        {
+            const int cx = (xl + xr) / 2;
+            const int cy = (bottom.front().y() + top.front().y() + bottom.back().y() + top.back().y()) / 4;
+            const int w = xr - xl;
+            const int h = (top.front().y() - bottom.front().y() +
+                top.back().y() - bottom.back().y()) / 2;
+
+            // We need to reset the scale to (1, 1) or the text itself will be
+            // scaled as well. However, first we need to move the origin to the
+            // center of the text.
+            painter->save();  // FIXME this saves a whole lot of uninteresting
+                              // information, maybe we can save on performance??
+                              // transform() does not give the original translation...
+            painter->translate(cx, cy);
+            painter->scale(1, -1);
+
+            // TODO draw a white halo / border around the text.
+            // This does not seem to be trivial, e.g.
+            // https://stackoverflow.com/a/17517453
+
+            painter->setPen(QColorConstants::Black);
+            painter->drawText(-w/2, -h/2, w, h, Qt::AlignCenter | Qt::AlignVCenter,
+                border._airspace.CAT());
+
+            // Restore the earlier transformation:
+            painter->restore();
+        }
 
         // Draw the borders:
         drawAirspaceBorders(painter, style._lineColor, linewidth,
@@ -519,44 +561,4 @@ int Ui::SideViewQuickItem::widgetWidth()
 Units::Distance Ui::SideViewQuickItem::pressureAltitude() {
     //return GlobalObject::positionProvider()->pressureAltitude();
     return GlobalObject::positionProvider()->positionInfo().trueAltitudeAMSL();
-}
-
-
-QPointF Ui::SideViewQuickItem::getPolygonCentroid(const QPolygonF &polygon)
-{
-    qreal centroid_x = 0.0, centroid_y = 0.0;
-    qreal signedArea = 0.0;
-    qreal x0 = 0.0, y0 = 0.0;  // Current vertex coordinates
-    qreal x1 = 0.0, y1 = 0.0;  // Next vertex coordinates
-    qreal a = 0.0;  // Partial signed area
-
-    // For all vertices except last
-    int i;
-    for (i = 0; i < polygon.size() - 1; ++i)
-    {
-        x0 = polygon[i].x();
-        y0 = polygon[i].y();
-        x1 = polygon[i + 1].x();
-        y1 = polygon[i + 1].y();
-        a = x0 * y1 - x1 * y0;
-        signedArea += a;
-        centroid_x += (x0 + x1) * a;
-        centroid_y += (y0 + y1) * a;
-    }
-
-    // Do last vertex separately to avoid performing an expensive modulo operation in each iteration
-    x0 = polygon[i].x();
-    y0 = polygon[i].y();
-    x1 = polygon[0].x();
-    y1 = polygon[0].y();
-    a = x0 * y1 - x1 * y0;
-    signedArea += a;
-    centroid_x += (x0 + x1) * a;
-    centroid_y += (y0 + y1) * a;
-
-    signedArea *= 0.5;
-    centroid_x /= (6 * signedArea);
-    centroid_y /= (6 * signedArea);
-
-    return QPointF(centroid_x, centroid_y);
 }

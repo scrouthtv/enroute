@@ -99,9 +99,56 @@ private:
   std::vector<int> elevations;
 
   void drawSky(QPainter *painter);
+
+  /*! \brief Get a list of coordinates where each pixel of the route profile
+   * should be drawn.
+   */
   std::vector<QGeoCoordinate> getDrawpoints();
+
+  /*! \brief Draw the terrain.
+   *
+   * The list of draw points is evaluated. Afterwards, we retrieve the
+   * elevation at each draw point from the GeoMapProvider.
+   * Elevations below 0 ft are drawn as 0 ft.
+   *
+   * Finally, the ground polyline is drawn using a dark color,
+   * as well es a the area below filled with light brown.
+   */
   void drawTerrain(QPainter *painter);
+
+  /*! \brief Find any airspaces our route intersects.
+   *
+   * Sections where the route is identical to the airspace boundary
+   * are ignored and will therefore likely introduce errors into the
+   * route profile. Keep in mind, that due to floating point limitations,
+   * sections where the route is almost identical to the airspace boundary
+   * are also ignored.
+   *
+   * TODO?
+   *
+   * @return A list of airspace intersections.
+   */
   std::vector<AirspaceVerticalBorders> intersectAirspaces();
+
+  /*! \brief Get the horizontal border (bottom or top) of an airspace.
+   *
+   * The border is evaluated as a polyline connecting the left to the right
+   * corner. If the airspace border is specified above ground, this
+   * polyline follows the terrain countour.
+   *
+   * The left and right side must be given as screen coordinates (in px).
+   * Remember to divide track meters by hMeterPerPx.
+   *
+   * If the border cannot be parsed, a safe fallback value is used:
+   * When looking for the lower border, 0 ft AGL, else FL 600 is returned.
+   *
+   * @param boundary Specification of the airspace boundary. For allowed
+   * formats, see AirspaceHorizontalBorder::AirspaceHorizontalBorder.
+   *
+   * @param lower If true, the caller wants the lower
+   * @param xl Left screen coordinate in px.
+   * @param xr Right screen coordinate in px.
+   */
   QVector<QPoint> getHBorder(const QString& boundary, bool lower,
     const int xl, const int xr);
 
@@ -123,7 +170,7 @@ private:
   std::optional<QGeoCoordinate> intersect(const QGeoCoordinate& a1,
     const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2);
 
-  /**! \brief Draw evaluated borders of the airspace.
+  /*! \brief Draw the borders of an airspace.
    *
    * @param bottom Bottom border with points sorted from left to right.
    * @param top Top border with points sorted from left to right.
@@ -136,30 +183,21 @@ private:
     const QVector<QPoint>& bottom, const QVector<QPoint>& top,
     const std::optional<QVector<QPoint>> entering,
     const std::optional<QVector<QPoint>> leaving) const;
+
+  /*! \brief Draw the airspace borders.
+   *
+   * For each crossed airspace, the lower and upper borders are evaluated.
+   * If the airspace starts before / enters after the plot, these borders
+   * are not drawn.
+   * All other borders are drawn.
+   */
   void drawAirspaces(QPainter *painter,
     const std::vector<AirspaceVerticalBorders>& borders);
-
-  /*void drawNoTrackAvailable(QPainter *painter);
-  int getHighestElevation(std::vector<int> &elevations, const Positioning::PositionInfo &info, float defaultUpperLimit);
-  std::vector<Airspace2D> get2dAirspaces(double track, float steps, float stepsBackwards, float stepSizeInMeter);
-  std::vector<MergedAirspace2D> mergedAirspaces2D(std::vector<Airspace2D> airspaces, std::vector<int> &elevations, float steps, int highestElevation);
-  std::vector<MergedAirspace2D> mergeAirspaces(std::vector<Airspace2D> mergedAirspaces);
-  void drawAirspacesOutline(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D);
-  void drawAirspacesArea(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D);
-  void drawAirspacesLabel(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D);
-  void drawTerrain(QPainter *painter, const std::vector<int> &elevations, int highestElevation, float steps);
-  QStringList airspaceSortedCategories();
-  void drawAircraft(QPainter *painter, const Positioning::PositionInfo &info, int highestElevation, float steps, float stepsOffset);
-  void drawCurrentHorizontalPosition(QPainter *painter, const Positioning::PositionInfo &info, float steps, float stepsBackwards);
-  void drawFlightPath(QPainter *painter, const Positioning::PositionInfo &info, int highestElevation, float steps, float stepOffset);
-  int yCoordinate(int altitude, int maxHeight, int objectHeight);*/
 
   int widgetHeight();
   int widgetWidth();
   Units::Distance pressureAltitude();
-  QPointF getPolygonCentroid(const QPolygonF &polygon);
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
-
 };
 
 } // namespace Ui
