@@ -882,6 +882,8 @@ Item {
         NavBar {
             id: navBar
 
+            pixelPer10km: flightMap.pixelPer10km
+
             Layout.fillWidth: true
             Layout.columnSpan: 3
         }

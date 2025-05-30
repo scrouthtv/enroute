@@ -23,6 +23,7 @@
 #include <optional>
 #include <QQmlEngine>
 #include <QtQuick/QQuickPaintedItem>
+#include <QMutex>
 #include <set>
 
 #include "AirspaceStyling.h"
@@ -54,7 +55,16 @@ public:
    */
   void paint(QPainter *painter) override;
 
+  /*! \brief Horizontal scale of the route profile.
+   *
+   * Specified in meters / pixel.
+   */
+  Q_PROPERTY(qreal pixelPer10km READ pixelPer10km WRITE setPixelPer10km)
+
 private:
+  void setPixelPer10km(const qreal& pixelPer10km);
+  qreal pixelPer10km() const;
+
   class AirspaceVerticalBorder {
    public:
     AirspaceVerticalBorder(QGeoCoordinate intersection, int trackM) : _intersection(intersection), _trackM(trackM) {}
@@ -75,6 +85,10 @@ private:
      * If the string is of unknown format, a std::runtime_error is thrown.
      */
     explicit AirspaceHorizontalBorder(const QString& boundary);
+
+    /**! \brief Create a new AirspaceHorizontalBorder from an explicit height
+     * and AGL setting.
+     */
     AirspaceHorizontalBorder(const int heightF, bool isAGL) :
       _heightF(heightF), _isAGL(isAGL) {}
 
@@ -92,7 +106,7 @@ private:
     std::optional<AirspaceVerticalBorder> _leavingBorder;
   };
 
-  const float hMeterPerPx = 100;
+  qreal hMeterPerPx = 100;
   const float vFtPerPx = 100;
 
   Navigation::FlightRoute* route;
@@ -198,6 +212,10 @@ private:
   int widgetWidth();
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
+
+  bool textDrawn = false;
+  QMutex mutex;
+  int y = 0;
 };
 
 } // namespace Ui

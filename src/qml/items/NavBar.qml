@@ -25,10 +25,16 @@ import QtQuick.Layouts
 import akaflieg_freiburg.enroute
 
 ColumnLayout {
+    property real pixelPer10km: 100
+
+    id: navColumns
     spacing: 0  // Set the spacing between children to 0
+
     SideView {
+        id: sideView
         Layout.fillWidth: true
         Layout.preferredHeight: 100
+        pixelPer10km: navColumns.pixelPer10km
     }
 
     Rectangle {
