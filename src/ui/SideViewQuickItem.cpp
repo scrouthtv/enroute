@@ -18,11 +18,14 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+#include <QBrush>
 #include <QPainter>
 #include <QElapsedTimer>
 #include <QFont>
 #include <QDebug>
 #include <QPen>
+#include <QPainterStateGuard>
+#include <QPoint>
 #include <QRect>
 #include <QVector>
 #include <QtConcurrent>
@@ -31,6 +34,7 @@
 #include <set>
 
 #include "GlobalObject.h"
+#include "Navigator.h"
 #include "PositionProvider.h"
 #include "PositionInfo.h"
 #include "GeoMapProvider.h"
@@ -48,51 +52,54 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     QElapsedTimer timer;
     timer.start();
 
-    auto info = GlobalObject::positionProvider()->positionInfo();
-    auto track = info.trueTrack().toDEG();
-    if (!pressureAltitude().isFinite() || qIsNaN(track)) {
-        drawNoTrackAvailable(painter);
+    // The Qt coordinate system starts at the top left corner, with
+    // y pointing downwards.
+    // Our world's coordinate system should start at the bottom left corner,
+    // with y pointing upwards.
+    painter->scale(1, -1);
+    painter->translate(0, -widgetHeight());
+
+    // Collect information:
+    if (GlobalObject::navigator()->flightRoute() == nullptr) {
+        // TODO Show error message
         return;
+    } else {
+        route = GlobalObject::navigator()->flightRoute();
     }
 
-
-    auto geoMapProvider = GlobalObject::geoMapProvider();
     drawSky(painter);
 
-    const float steps = 100;
-    const float stepsOffset = 10; //Number of steps "behind" the aircraft
-    const float stepSizeInMeter = info.groundSpeed().toKMH() / 6 / steps * 1000;
-    const float defaultUpperLimit = 1000;
+    const auto navigator = GlobalObject::navigator();
+    const auto route = navigator->flightRoute();
 
-    std::vector<int> elevations = getElevations(info, track, steps, stepSizeInMeter, stepsOffset);
-    int highestElevation = getHighestElevation(elevations, info, defaultUpperLimit);
-    
-    auto airspaces = get2dAirspaces(track, steps, stepsOffset, stepSizeInMeter);
-    auto mergedAirspaces = mergedAirspaces2D(airspaces, elevations, steps, highestElevation);
-    
-    //Sort the airspaces, to draw the more important airspace on top of a less important one
-    auto categories = airspaceSortedCategories();
-    std::sort(mergedAirspaces.begin(), mergedAirspaces.end(), [categories](const MergedAirspace2D &a, const MergedAirspace2D &b) {
-        return categories.indexOf(a.category) < categories.indexOf(b.category);
-    });
+    drawTerrain(painter);
 
-    for (const MergedAirspace2D &mergedAirspace2D : mergedAirspaces)  {
-        drawAirspacesOutline(painter,mergedAirspace2D);
-        drawAirspacesArea(painter, mergedAirspace2D);
-    }
-    for (const MergedAirspace2D &mergedAirspace2D : mergedAirspaces)  {
-        drawAirspacesLabel(painter, mergedAirspace2D);
-    }
+    const auto borders = intersectAirspaces();
+    drawAirspaces(painter, borders);
 
-    drawTerrain(painter, elevations, highestElevation, steps);
-    drawAircraft(painter, info, highestElevation, steps, stepsOffset);
-    drawFlightPath(painter, info, highestElevation, steps, stepsOffset);
-    drawCurrentHorizontalPosition(painter, info, steps, stepsOffset);
+    // Draw airspace lower and upper bounds
+    // Airspace label
+    // Insert waypoints and waypoints along the way (?)
+    // Plane symbol
+    // Weather
+    // Zoom + Move
+    // Show related position on map
+    // NOTAM
+    // Scala
 
     qDebug() << "Drawing took" << timer.elapsed() << "milliseconds"; //TODO Remove
 }
 
-void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
+std::vector<QGeoCoordinate> Ui::SideViewQuickItem::getDrawpoints() {
+    std::vector<QGeoCoordinate> points;
+    for (double m = 0; m < route->lengthM(); m += hMeterPerPx) {
+        auto position = route->positionAtTrackM(m);
+        points.push_back(position);
+    }
+    return points;
+}
+
+/*void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
 {
     drawSky(painter);
 
@@ -122,267 +129,381 @@ void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
     painter->drawText(1, 21, widgetWidth(), 40, Qt::AlignCenter, text);
     painter->setPen(QPen(Qt::white));
     painter->drawText(0, 20, widgetWidth(), 40, Qt::AlignCenter, text);
-}
+}*/
 
 void Ui::SideViewQuickItem::drawSky(QPainter *painter)
 {
-    // Define gradient for the sky
-    QLinearGradient skyGradient(0, 0, 0, widgetHeight());
-    skyGradient.setColorAt(0.0, QColor(135, 206, 235)); // Light blue at the top
-    skyGradient.setColorAt(1.0, QColor(0, 191, 255));   // Deeper blue at the bottom
-
-    // Fill the background with the sky gradient
-    painter->fillRect(0, 0, widgetWidth(), widgetHeight(), skyGradient);
+    // Fill the background with a solid color:
+    QColor sky(144, 213, 255);
+    painter->fillRect(0, 0, widgetWidth(), widgetHeight(), sky);
 }
 
-std::vector<int> Ui::SideViewQuickItem::getElevations(const Positioning::PositionInfo &info, double track, float steps, float stepSizeInMeter, float stepOffset)
-{
-    std::vector<int> elevations;
-    for (int i = 0 - stepOffset; i < steps - stepOffset + 1; i++) {
-        auto position = info.coordinate().atDistanceAndAzimuth(i * stepSizeInMeter, track, 0);
-        auto elevation = GlobalObject::geoMapProvider()->terrainElevationAMSL(position).toFeet();
-        elevations.push_back(elevation);
+void Ui::SideViewQuickItem::drawTerrain(QPainter *painter) {
+    const auto coords = getDrawpoints();
+    elevations = std::vector<int>(coords.size());
+
+    QList<QPoint> surface;
+    int x = 0;
+    for (const auto& coord : coords) {
+        auto elevation = GlobalObject::geoMapProvider()->terrainElevationAMSL(coord).toFeet();
+        elevations[x] = elevation;
+        int y = elevation / vFtPerPx;
+        if (y < 0) y = 0;  // TODO is this okay? Or are there significant points below 0 ft?
+        surface.append(QPoint(x, y));
+        x++;
     }
-    return elevations;
+
+    QPainterStateGuard guard(painter);
+
+    // Draw the terrain surface with a dark color:
+    painter->setPen(QColor(67, 54, 37));
+    painter->drawPolyline(surface.data(), surface.size());
+
+    // Fill the ground below with a light brown color:
+    surface.insert(0, QPoint(0, 0));
+    surface.append(QPoint(x - 1, 0));
+
+    painter->setBrush(QColor(122, 98, 61));
+    QPolygon poly(surface);
+    painter->drawPolygon(poly);
 }
 
-int Ui::SideViewQuickItem::getHighestElevation(std::vector<int> &elevations, const Positioning::PositionInfo &info, float defaultUpperLimit)
-{
-    elevations.push_back(info.trueAltitudeAMSL().toFeet());
-    int highestElevation = *std::max_element(elevations.begin(), elevations.end());
-    highestElevation = std::max(static_cast<int>(highestElevation * 1.3), static_cast<int>(defaultUpperLimit));
-    elevations.pop_back();
-    return highestElevation;
-}
+std::vector<Ui::SideViewQuickItem::AirspaceVerticalBorders>
+Ui::SideViewQuickItem::intersectAirspaces() {
+    std::vector<Ui::SideViewQuickItem::AirspaceVerticalBorders> result;
+    const auto path = route->geoPath();
 
-std::vector<Ui::SideViewQuickItem::Airspace2D> Ui::SideViewQuickItem::get2dAirspaces(double track, float steps, float stepsBackwards, float stepSizeInMeter)
-{
-    auto info = GlobalObject::positionProvider()->positionInfo();
-    std::map<int, std::vector<GeoMaps::Airspace>> stepAirspaces;
-    auto categories = airspaceSortedCategories();
+    // Keep track of the track distance to each waypoint in the route
+    // to avoid recalculating for every airspace:
+    std::vector<int> trackMetersToWP;
+    trackMetersToWP.push_back(0);
 
-    QSet<QString> categorySet;
-    for (const QString &item : categories) {
-        categorySet.insert(item);
-    }
+    // Get all relevant airspaces:
+    const auto airspaces = GlobalObject::geoMapProvider()->airspaces(route->boundingRectangle());
 
-    QElapsedTimer timer;
-    timer.start();
-  
-    QVector<QGeoCoordinate> positions;
-    for (int i = 0 - stepsBackwards; i < steps - stepsBackwards; ++i) {
-        auto position = info.coordinate().atDistanceAndAzimuth(i * stepSizeInMeter, track, 0);
-        positions.append(position);
-    }
+    for (const auto& airspace : airspaces) {
+        const auto& perimeter = airspace.polygon().perimeter();
+        bool inside = airspace.polygon().contains(path[0]);
+        auto borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
 
-    auto airspacesAtPositions = GlobalObject::geoMapProvider()->airspaces(positions, categorySet);
+        for (std::size_t i = 1; i < path.size(); i++) {
+            const auto rtA = path[i - 1];
+            const auto rtB = path[i];
 
-    for (int step = 0; step < airspacesAtPositions.size(); ++step) {
-        const auto& airspaces = airspacesAtPositions[step];
-        for (const QVariant& var : airspaces) {
-            GeoMaps::Airspace airspace = qvariant_cast<GeoMaps::Airspace>(var);
-            stepAirspaces[step].push_back(airspace);
-        }
-    }
-    
-    std::vector<Airspace2D> allMergedAirspaces;
-    for (const auto &step : stepAirspaces) {
-        int stepIndex = step.first;
+            // Calculate and cache the track meters up to the current waypoint.
+            if (trackMetersToWP.size() <= i) {
+                int trackMeters = rtA.distanceTo(rtB);
+                // If there were earlier legs, add their distance to the current leg:
+                trackMeters += trackMetersToWP[i - 1];
+                trackMetersToWP.push_back(trackMeters);
+            }
 
-        for (const GeoMaps::Airspace &airspace : step.second) {
-            bool merged = false;
+            // Get distance to the start of the current leg, reusing the cached value:
+            const int metersToRTA = trackMetersToWP[i - 1];
 
-            for (auto &mergedAirspace : allMergedAirspaces) {
-                if (mergedAirspace.airspace.CAT() == airspace.CAT() &&
-                    mergedAirspace.airspace.name() == airspace.name() &&
-                    mergedAirspace.airspace.lowerBound() == airspace.lowerBound() &&
-                    mergedAirspace.airspace.upperBound() == airspace.upperBound()) {
-                    mergedAirspace.lastStep = stepIndex + 1; //TODO: Is the +1 a good idea?
-                    merged = true;
-                    break;
+            // TODO Is the perimeter explicitely closed, i. e. is the first point the
+            // same as the last point?
+            // If this weren't the case, we should also check for intersection
+            // with pA = perimeter[0] and pB = perimeter[end].
+            for (std::size_t j = 1; j < perimeter.size(); j++) {
+                const auto& pA = perimeter[j - 1];
+                const auto& pB = perimeter[j];
+
+                const auto intersection = intersect(rtA, rtB, pA, pB);
+                if (intersection) {
+                    int trackmeters = metersToRTA + rtA.distanceTo(*intersection);
+
+                    if (inside) {
+                        borders._leavingBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(*intersection, trackmeters);
+                        result.push_back(borders);
+                        borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
+                        inside = false;
+                    } else {
+                        borders._enteringBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(*intersection, trackmeters);
+                        inside = true;
+                    }
                 }
             }
+        }
 
-            if (!merged) {
-                Airspace2D newMergedAirspace = { airspace, stepIndex, stepIndex };
-                allMergedAirspaces.push_back(newMergedAirspace);
-            }
+        // Add last border if we enter but do not leave the airspace at the end:
+        if (inside && borders._enteringBorder) {
+            result.push_back(borders);
         }
     }
 
-    return allMergedAirspaces;
+    return result;
 }
 
-std::vector<Ui::SideViewQuickItem::MergedAirspace2D> Ui::SideViewQuickItem::mergedAirspaces2D(std::vector<Airspace2D> airspaces2D, std::vector<int> &elevations, float steps, int highestElevation) {
-    for (auto &airspace2d : airspaces2D) {
-        auto airspace = airspace2d.airspace;
-        auto lowerBound = airspace.lowerBound().toLower();
-        auto upperBound = airspace.upperBound().toLower();
+std::optional<QGeoCoordinate> Ui::SideViewQuickItem::intersect(const QGeoCoordinate& a1,
+  const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2) {
+    // Implementation based on https://stackoverflow.com/a/1968345 for now:
+    // latitude is y
+    const double a_x = a2.longitude() - a1.longitude();
+    const double a_y = a2.latitude() - a1.latitude();
+    const double b_x = b2.longitude() - b1.longitude();
+    const double b_y = b2.latitude() - b1.latitude();
 
-        QList<QPoint> polygons;
+    const double d = -b_x * a_y + a_x * b_y;
 
-        //Are Bounds relative to Ground? If so, we cant use simple rectangles
-        if (lowerBound.endsWith("agl") || lowerBound.endsWith("gnd") || upperBound.endsWith("agl") || upperBound.endsWith("gnd") ) {
-            for (int i = airspace2d.firstStep; i <= airspace2d.lastStep; i++) {
-                auto x = widgetWidth() / steps * i;
-                auto y = yCoordinate(airspace.estimatedLowerBoundMSL(elevations[i]).toFeet(), highestElevation, 0);
-                polygons.push_back(QPoint(x, y));
-            }
-            for (int i = airspace2d.lastStep; i >= airspace2d.firstStep; i--) {
-                auto x = widgetWidth() / steps * i;
-                auto y = yCoordinate(airspace.estimatedUpperBoundMSL(elevations[i]).toFeet(), highestElevation, 0);
-                polygons.push_back(QPoint(x, y));
-            }
-
-        } else {
-            int xStart = static_cast<int>((airspace2d.firstStep / steps) * widgetWidth());
-            int xEnd = static_cast<int>((airspace2d.lastStep / steps) * widgetWidth());
-
-            int lowerY = yCoordinate(airspace.estimatedLowerBoundMSL().toFeet(), highestElevation, 0);
-            int upperY = qMax(yCoordinate(airspace.estimatedUpperBoundMSL().toFeet(), highestElevation, 0), 0);
-
-            polygons.push_back(QPoint(xStart, lowerY));
-            polygons.push_back(QPoint(xStart, upperY));
-            polygons.push_back(QPoint(xEnd, upperY));
-            polygons.push_back(QPoint(xEnd, lowerY));
-        }
-        airspace2d.polygon = QPolygon(polygons);
+    if (d == 0) { // Lines are collinear
+        return std::nullopt;
     }
 
-    return mergeAirspaces(airspaces2D); //TODO merge later
-}
+    const double s = (-a_y * (a1.longitude() - b1.longitude()) + a_x * (a1.latitude() - b1.latitude())) / d;
+    const double t = ( b_x * (a1.latitude() - b1.latitude()) - b_y * (a1.longitude() - b1.longitude())) / d;
 
-
-QStringList Ui::SideViewQuickItem::airspaceSortedCategories() {
-    return {"TMZ", "RMZ", "NRA", "DNG", "D", "C", "B", "A", "CTR", "R", "P"};
-}
-
-void Ui::SideViewQuickItem::drawAirspacesOutline(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D)
-{
-    QPen pen = painter->pen();
-    pen.setStyle(Qt::DotLine);
-    auto penWidth = pen.width();
-    pen.setWidth(2);
-    painter->setPen(pen);
-
-    for (const Airspace2D &airspace2D : mergedAirspaces2D.airspaces) {
-        painter->drawPolygon(airspace2D.polygon);
+    if (s >= 0 && s <= 1 && t >= 0 && t <= 1) {
+        return QGeoCoordinate(a1.latitude() + (t * a_y), a1.longitude() + (t * a_x));
     }
 
-    pen.setStyle(Qt::SolidLine);
-    pen.setWidth(penWidth);
-
-    painter->setPen(pen);
+    return std::nullopt; // No collision
 }
 
-void Ui::SideViewQuickItem::drawAirspacesArea(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D)
-{
-    QColor color;
-    auto category = mergedAirspaces2D.category;
-    if (category == "CTR" || category == "R" || category == "DNG" || category == "P") {
-        color = QColor("red");
-    } else if (category == "TMZ"){
-        color = QColor("grey");
-    } else if (category == "NRA") {
-        color = QColor("green");
+Ui::SideViewQuickItem::AirspaceHorizontalBorder::AirspaceHorizontalBorder(const QString& boundary) {
+    bool ok;
+    if (boundary == "GND") {
+        _heightF = 0;
+        _isAGL = true;
+        return;
+    } else if (boundary.endsWith("AGL")) {
+        _heightF = boundary.chopped(3).toInt(&ok);
+        _isAGL = true;
+    } else if (boundary.startsWith("FL")) {
+        _heightF = boundary.sliced(2).toInt(&ok) * 100;
+        _isAGL = false;
     } else {
-        color = QColor("blue");
+        _heightF = boundary.toInt(&ok);
+        _isAGL = false;
     }
 
-    QPen pen = painter->pen();
-    pen.setStyle(Qt::NoPen);
+    if (!ok) {
+        throw std::runtime_error("Invalid airspace boundary '" +
+            boundary.toStdString() + "'");
+    }
+}
+
+void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
+        const QColor& color, const int linewidth,
+        const std::optional<QList<qreal>>& dashPattern,
+        const QVector<QPoint>& bottom, const QVector<QPoint>& top,
+        const std::optional<QVector<QPoint>> entering,
+        const std::optional<QVector<QPoint>> leaving) const {
+    QVector<QPolygon> lines; // Consider replacing this with pointers or refs,
+                             // to avoid copying the polygons. We only use it
+                             // inside this function to draw, anyways.
+
+    if (!entering && !leaving) {
+        // Only in this case, we need to draw to separate polylines.
+        lines.push_back(bottom);
+        lines.push_back(top);
+    } else if (leaving) {
+        // Combine all borders into one polyline.
+        QVector<QPoint> polyline;
+        polyline.reserve(bottom.size() + top.size() + leaving->size() +
+            (entering ? entering->size() : 0));
+
+        // Append bottom (left to right) and right (bottom to top):
+        polyline.append(bottom);
+        polyline.append(*leaving);
+
+        // Reverse append top (right to left):
+        for (auto it = top.crbegin(); it != top.crend(); ++it) {
+            polyline.append(*it);
+        }
+
+        // Reverse append entering (top to bottom), if it exists:
+        if (entering) {
+            for (auto it = entering->crbegin(); it != entering->crend(); ++it) {
+                polyline.append(*it);
+            }
+        }
+
+        lines.push_back(polyline);
+    } else {
+        // In this case, only entering exists.
+        // Combine the three borders into one polyline.
+        QVector<QPoint> polyline;
+        polyline.reserve(top.size() + entering->size() + bottom.size());
+
+        // Reverse append top (right to left):
+        for (auto it = top.crbegin(); it != top.crend(); ++it) {
+            polyline.append(*it);
+        }
+
+        // Reverse append entering (top to bottom):
+        for (auto it = entering->crbegin(); it != entering->crend(); ++it) {
+            polyline.append(*it);
+        }
+
+        // Append bottom (left to right):
+        polyline.append(bottom);
+
+        lines.push_back(polyline);
+    }
+
+    // Finally, draw the polyline(s):
+    QPen pen(color);
+    pen.setWidth(linewidth);
+    if (dashPattern) pen.setDashPattern(*dashPattern);
     painter->setPen(pen);
-    painter->setBrush(color.lighter(160));
 
-    for (const Airspace2D &airspace2D : mergedAirspaces2D.airspaces) {
-        painter->drawPolygon(airspace2D.polygon);
+    for (const QPolygon& poly : lines)
+        painter->drawPolygon(poly);
+}
+
+/*void Ui::SideViewQuickItem::drawAirspaceVBorder(QPainter *painter,
+        const Ui::SideViewQuickItem::AirspaceVerticalBorder& border,
+        bool entering, const Ui::AirspaceStyle& style) {
+    const int x = border._trackM / hMeterPerPx;
+
+    // 1. Draw the offset border:
+    if (style._offsetColor) {
+        QColor clr = *style._offsetColor;
+        clr.setAlphaF(style._offsetOpacity);
+        QPen pen(clr);
+        pen.setWidth(offsetWidth);
+        painter->setPen(pen);
+        int tempx = x;
+        if (entering) tempx += offsetWidth/2;
+        else tempx -= offsetWidth/2;
+        painter->drawLine(tempx, 0, tempx, widgetHeight());
     }
-    pen.setStyle(Qt::SolidLine);
+
+    // 2. Draw the line:
+    QPen pen(style._lineColor);
+    if (style._dashPattern) {
+        pen.setDashPattern(*style._dashPattern);
+    }
+    pen.setWidth(linewidth);
     painter->setPen(pen);
-}
-
-void Ui::SideViewQuickItem::drawAirspacesLabel(QPainter *painter, const MergedAirspace2D &mergedAirspaces2D)
-{
-    auto polygon = QPolygon{};
-
-    for (auto &airspace : mergedAirspaces2D.airspaces) {
-        polygon = polygon.united(airspace.polygon);
-    }
-
-    QPointF centroid = getPolygonCentroid(polygon);
-
-    QFont font = painter->font();
-    font.setPointSizeF(13); //TODO: Make dynamic??
-    painter->setFont(font);
-    // Adjust for label positioning
-    QFontMetrics metrics = painter->fontMetrics();
-    QString label = mergedAirspaces2D.category;
-    int textWidth = metrics.horizontalAdvance(label);
-    int textHeight = metrics.height();
-
-    // Draw the label at the centroid, adjusting to center the text
-    painter->drawText(centroid.x() - textWidth / 2, centroid.y() + textHeight / 2, label);
-}
-
-
-void Ui::SideViewQuickItem::drawTerrain(QPainter *painter, const std::vector<int> &elevations, int highestElevation, float steps)
-{
-    QLinearGradient terrainGradient(0, 0, 0, widgetHeight());
-    terrainGradient.setColorAt(0.0, QColor(153, 102, 51));
-    terrainGradient.setColorAt(1.0, QColor(101, 67, 33));
-    painter->setBrush(terrainGradient);
-
-    std::vector<QPointF> polygons;
-    polygons.push_back(QPointF(0, widgetHeight())); // Additional polygon at the very left side to fill the terrain with color
-
-    for (size_t i = 0; i < steps; ++i) {
-        auto elevation = elevations[i];
-        auto x = widgetWidth() / steps * i;
-        auto y = yCoordinate(elevation, highestElevation, 0);
-        polygons.push_back(QPointF(x, y));
-    }
-
-    polygons.push_back(QPointF(widgetWidth() * 1.1, widgetHeight())); // Additional polygon outside the screen for improved design at the RH side of the screen
-    painter->drawPolygon(polygons.data(), static_cast<int>(polygons.size()));
-}
-
-void Ui::SideViewQuickItem::drawAircraft(QPainter *painter, const Positioning::PositionInfo &info, int highestElevation, float steps, float stepsOffset)
-{
-    //TODO: Draw Icon instead of box
-    auto altitude = pressureAltitude().toFeet();
-    auto width = 10;
-    auto x = (widgetWidth() / steps) * stepsOffset - width;
-    painter->fillRect(x, yCoordinate(altitude, highestElevation, 10), width, 10, QColor("black"));
-}
-
-void Ui::SideViewQuickItem::drawFlightPath(QPainter *painter, const Positioning::PositionInfo &info, int highestElevation, float steps, float stepOffset)
-{
-    auto altitude = pressureAltitude().toFeet();
-    auto verticalSpeed = info.verticalSpeed().toFPM();
-    auto altitudeIn10Minutes = verticalSpeed * 10 + altitude;
-
-    painter->drawLine(0, yCoordinate(altitude, highestElevation, 0), widgetWidth() + 10, yCoordinate(altitude, highestElevation, 0));
-    
-    QPen pen = painter->pen();
-    pen.setStyle(Qt::DotLine);
-    painter->setPen(pen);
-    
-    auto x = widgetWidth() / steps * stepOffset;
-    painter->drawLine(x, yCoordinate(altitude, highestElevation, 0), widgetWidth() + 10, yCoordinate(altitudeIn10Minutes, highestElevation, 0));
-}
-
-void Ui::SideViewQuickItem::drawCurrentHorizontalPosition(QPainter *painter, const Positioning::PositionInfo &info, float steps, float stepsBackwards) {
-    auto x = (widgetWidth() / steps) * stepsBackwards;
-
     painter->drawLine(x, 0, x, widgetHeight());
+}*/
+
+QVector<QPoint>
+Ui::SideViewQuickItem::getHBorder(const QString& boundary, bool lower,
+const int xl, const int xr) {
+    Ui::SideViewQuickItem::AirspaceHorizontalBorder border(0, false);
+    try {
+        border = Ui::SideViewQuickItem::AirspaceHorizontalBorder(boundary);
+    } catch (const std::runtime_error& ex) {
+        if (!lower) {
+            // Move the upper border sufficiently (FL 600) upwards.
+            border = Ui::SideViewQuickItem::AirspaceHorizontalBorder(600 * 100, false);
+        }
+        qWarning() << "Invalid airspace boundary: " << ex.what();
+        qWarning() << "Defaulting to " << border._heightF << " ft.";
+    }
+
+    QVector<QPoint> points;
+
+    if (border._isAGL) {
+        auto elevation = elevations.cbegin() + xl;
+        // TODO check whether we have elevation data for the whole track
+        for (int x = xl; x <= xr; x++)
+            points.push_back(QPoint(x, (border._heightF + *(elevation++)) / vFtPerPx));
+    } else {
+        points.push_back(QPoint(xl, border._heightF / vFtPerPx));
+        points.push_back(QPoint(xr, border._heightF / vFtPerPx));
+    }
+
+    return points;
 }
 
-int Ui::SideViewQuickItem::yCoordinate(int altitude, int maxHeight, int objectHeight)
-{
+void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
+        const std::vector<Ui::SideViewQuickItem::AirspaceVerticalBorders>& borders) {
+    const int offsetWidth = 6;  // FIXME have this somewhere configurable.
+    const int linewidth = 2;
 
-    if (altitude > maxHeight) return 0; //Dont draw above the widget
-    int heightOnDisplay = static_cast<int>(static_cast<double>(altitude) / maxHeight * widgetHeight());
-    return widgetHeight() - heightOnDisplay - objectHeight / 2;
+    const StyleManager styleManager;  // FIXME avoid costly relocation of this by using singletons.
+    for (const auto& border : borders) {
+        const auto& style = styleManager.getStyle(border._airspace.CAT());
+        QPainterStateGuard guard(painter);
+
+        std::optional<QVector<QPoint>> entering;
+        std::optional<QVector<QPoint>> leaving;
+
+        int xl = 0;
+        if (border._enteringBorder)
+            xl = border._enteringBorder->_trackM / hMeterPerPx;
+
+        int xr = route->lengthM() / hMeterPerPx;
+        if (border._leavingBorder)
+            xr = border._leavingBorder->_trackM / hMeterPerPx;
+
+        const auto bottom = getHBorder(border._airspace.lowerBound(), true, xl, xr);
+        const auto top = getHBorder(border._airspace.upperBound(), false, xl, xr);
+
+        if (border._enteringBorder)
+            entering = QVector<QPoint>({bottom.front(), top.front()});
+
+        if (border._leavingBorder)
+            leaving = QVector<QPoint>({bottom.back(), top.back()});
+
+        // Fill the airspace:
+        if (style._fillColor) {
+            // No line:
+            painter->setPen(QColor("transparent"));
+
+            // Specify background color:
+            QColor clr = *style._fillColor;
+            clr.setAlphaF(style._fillOpacity);
+            painter->setBrush(clr);
+
+            // Merge the bottom and top to get the area defined by its borders:
+            QVector<QPoint> area;
+            area.reserve(bottom.size() + top.size());
+            area.append(bottom);
+
+            // Reverse append the top (right to left):
+            for (auto it = top.crbegin(); it != top.crend(); ++it)
+                area.append(*it);
+
+            // Draw the area:
+            painter->drawPolygon(area);
+        }
+
+        // Draw the inset outline:
+        if (style._offsetColor) {
+            // Create offset borders:
+            QVector<QPoint> bO, tO;
+            std::optional<QVector<QPoint>> eO, lO;
+
+            bO.reserve(bottom.size());
+            tO.reserve(top.size());
+
+            // Offset them:
+            for (const QPoint& pt : bottom)
+                bO.append(QPoint(pt.x(), pt.y() + offsetWidth / 2));
+            for (const QPoint& pt : top)
+                tO.append(QPoint(pt.x(), pt.y() - offsetWidth / 2));
+
+            if (entering) {
+                eO.emplace();
+                eO->reserve(entering->size());
+                for (const QPoint& pt : *entering)
+                    eO->append(QPoint(pt.x() + offsetWidth / 2, pt.y()));
+            }
+
+            if (leaving) {
+                lO.emplace();
+                lO->reserve(leaving->size());
+                for (const QPoint& pt : *leaving)
+                    lO->append(QPoint(pt.x() - offsetWidth / 2, pt.y()));
+            }
+
+            QColor clr = *style._offsetColor;
+            clr.setAlphaF(style._offsetOpacity);
+            drawAirspaceBorders(painter, clr, offsetWidth,
+                std::nullopt, bO, tO, eO, lO);
+        }
+
+        // TODO label the airspace
+
+        // Draw the borders:
+        drawAirspaceBorders(painter, style._lineColor, linewidth,
+            style._dashPattern, bottom, top, entering, leaving);
+    }
 }
 
 int Ui::SideViewQuickItem::widgetHeight()
