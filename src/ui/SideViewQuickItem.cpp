@@ -439,34 +439,3 @@ QPointF Ui::SideViewQuickItem::getPolygonCentroid(const QPolygonF &polygon)
 
     return QPointF(centroid_x, centroid_y);
 }
-
-std::vector<Ui::SideViewQuickItem::MergedAirspace2D> Ui::SideViewQuickItem::mergeAirspaces(std::vector<Airspace2D> airspaces2D) {
-    std::vector<MergedAirspace2D> reallyMergedAirspaces;
-    std::set<Airspace2D> processed;
-    for (size_t i = 0; i < airspaces2D.size(); ++i) {
-        auto airspace = airspaces2D[i];
-
-        if (!processed.contains(airspace)) {
-            Airspace2D merged = airspace;
-            processed.insert(airspace);
-            MergedAirspace2D mergedAirspace = {};
-            mergedAirspace.category = airspace.airspace.CAT();
-            mergedAirspace.airspaces.push_back(airspace);
-
-            // Iterate through the remaining airspaces to find and merge overlapping ones
-            for (size_t j = i + 1; j < airspaces2D.size(); ++j) {
-                auto comparingAirspace = airspaces2D[j];
-                if (!processed.contains(comparingAirspace) &&
-                    comparingAirspace.airspace.name() == airspace.airspace.name() &&
-                    comparingAirspace.airspace.CAT() == airspace.airspace.CAT()) {
-
-                    mergedAirspace.airspaces.push_back(comparingAirspace);
-                    processed.insert(comparingAirspace);
-                }
-            }
-
-            reallyMergedAirspaces.push_back(mergedAirspace);
-        }
-    }
-    return reallyMergedAirspaces;
-}
