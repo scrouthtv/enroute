@@ -236,6 +236,33 @@ QVector<QVariantList> GeoMaps::GeoMapProvider::airspaces(const QVector<QGeoCoord
 }
 
 
+QVector<GeoMaps::Airspace> GeoMaps::GeoMapProvider::airspaces(const QGeoRectangle &rect)
+{
+    QVector<Airspace> result;
+
+    // Lock data
+    QMutexLocker const lock(&_aviationDataMutex);
+
+    for(const auto& airspace : _airspaces_)
+    {
+        if (!airspace.isValid())
+        {
+            continue;
+        }
+
+        // Airspace bounding box:
+        const auto& abb = airspace.polygon().boundingGeoRectangle();
+        if (rect.contains(abb.topLeft()) || rect.contains(abb.topRight()) ||
+            rect.contains(abb.bottomLeft()) || rect.contains(abb.bottomRight()))
+        {
+            result.append(airspace);
+        }
+    }
+
+    return result;
+}
+
+
 GeoMaps::Waypoint GeoMaps::GeoMapProvider::closestWaypoint(QGeoCoordinate position, const QGeoCoordinate& distPosition)
 {
     position.setAltitude(qQNaN());

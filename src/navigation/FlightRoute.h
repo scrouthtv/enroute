@@ -299,6 +299,18 @@ namespace Navigation
         /*! \brief Reverse the route */
         Q_INVOKABLE void reverse();
 
+        /*! \brief Return the position at the given track meter.
+         * This determines whether the specified km is exactly on one of the waypoints.
+         * If it is, the position of the waypoint is returned.
+         * Otherwise, the position is interpolated between the two nearest waypoints.
+         * 
+         * @param trackKm Distance along the track in meters
+         */
+        Q_INVOKABLE QGeoCoordinate positionAtTrackM(double trackM) const;
+
+        /*! \brief Calculate the length of the route in meters.*/
+        Q_INVOKABLE double lengthM() const;
+
         /*! \brief Saves flight route to a file
          *
          * This method saves the flight route as a GeoJSON file.  The file

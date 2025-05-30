@@ -455,6 +455,38 @@ void Navigation::FlightRoute::reverse()
     emit waypointsChanged();
 }
 
+QGeoCoordinate Navigation::FlightRoute::positionAtTrackM(double trackM) const
+{
+    if (trackM <= 0) return geoPath().at(0);
+    else if (trackM >= lengthM()) return geoPath().at(size() - 1);
+
+    double i = 0; // index of the current waypoint
+    double dist = 0; // distance along the track to the current waypoint in meters
+    double distToPrev = 0; // distance along the track to the previous waypoint (needed for interpolation)
+
+    while (dist < trackM) {
+        distToPrev = dist;
+        i++;
+        dist += geoPath().at(i).distanceTo(geoPath().at(i - 1));
+    }
+
+    if (dist == trackM) {
+        return geoPath().at(i);
+    }
+
+    auto prev = geoPath().at(i - 1);
+    auto next = geoPath().at(i);
+    return prev.atDistanceAndAzimuth(trackM - distToPrev, prev.azimuthTo(next), 0);
+}
+
+double Navigation::FlightRoute::lengthM() const {
+    double length = 0;
+    for (int i = 1; i < size(); i++) {
+        length += geoPath().at(i).distanceTo(geoPath().at(i - 1));
+    }
+    return length;
+}
+
 auto Navigation::FlightRoute::save(const QString& fileName) const -> QString
 {
     QFile file(fileName);

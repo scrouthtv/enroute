@@ -270,6 +270,21 @@ public:
      */
     [[nodiscard]] Q_INVOKABLE QVector<QVariantList> airspaces(const QVector<QGeoCoordinate>& positions, const QSet<QString>& relevantCategories);
 
+    /*! \brief List of airspaces in a given rectangle
+     *
+     * This method returns all airspaces that are at least partially inside the
+     * given rectangle. Airspaces are selected using their bounding box, if any
+     * of the corners of the bounding box is inside the rectangle, the airspace
+     * is selected.
+     *
+     * @param rect Rectangle
+     *
+     * @returns all airspaces that are at least partially inside the given
+     * rectangle. Returns a list of Airspaces, as we don't need to interact
+     * with QML.
+     */
+    [[nodiscard]] Q_INVOKABLE QVector<Airspace> airspaces(const QGeoRectangle &rect);
+
     /*! \brief Find closest waypoint to a given position
      *
      * @param position Position near which waypoints are searched for
