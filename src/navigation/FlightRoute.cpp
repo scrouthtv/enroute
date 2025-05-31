@@ -457,8 +457,8 @@ void Navigation::FlightRoute::reverse()
 
 QGeoCoordinate Navigation::FlightRoute::positionAtTrackM(double trackM) const
 {
-    if (trackM <= 0) return geoPath().at(0);
-    else if (trackM >= lengthM()) return geoPath().at(size() - 1);
+    if (trackM <= 0) return m_waypoints.value().front().coordinate();
+    else if (trackM >= lengthM()) return m_waypoints.value().back().coordinate();
 
     double i = 0; // index of the current waypoint
     double dist = 0; // distance along the track to the current waypoint in meters
@@ -467,23 +467,29 @@ QGeoCoordinate Navigation::FlightRoute::positionAtTrackM(double trackM) const
     while (dist < trackM) {
         distToPrev = dist;
         i++;
-        dist += geoPath().at(i).distanceTo(geoPath().at(i - 1));
+        dist += m_waypoints.value().at(i).coordinate()
+            .distanceTo(m_waypoints.value().at(i - 1).coordinate());
     }
 
     if (dist == trackM) {
-        return geoPath().at(i);
+        return m_waypoints.value().at(i).coordinate();
     }
 
-    auto prev = geoPath().at(i - 1);
-    auto next = geoPath().at(i);
+    auto prev = m_waypoints.value().at(i - 1).coordinate();
+    auto next = m_waypoints.value().at(i).coordinate();
     return prev.atDistanceAndAzimuth(trackM - distToPrev, prev.azimuthTo(next), 0);
 }
 
 double Navigation::FlightRoute::lengthM() const {
+    if (m_waypoints.value().size() < 2)
+        return 0;
+
     double length = 0;
-    for (int i = 1; i < size(); i++) {
-        length += geoPath().at(i).distanceTo(geoPath().at(i - 1));
+    for (int i = 1; i < m_waypoints.value().size(); i++) {
+        length += m_waypoints.value().at(i).coordinate().
+            distanceTo(m_waypoints.value().at(i - 1).coordinate());
     }
+
     return length;
 }
 
