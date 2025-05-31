@@ -25,7 +25,11 @@ import QtQuick.Layouts
 import akaflieg_freiburg.enroute
 
 ColumnLayout {
-    property real pixelPer10km: 100
+    function setMapBoundary(boundary) {
+        // Even though it would make sense, I am not able to call
+        // sideView.setMapBoundary directly from the FlightMap QML.
+        sideView.setMapBoundary(boundary)
+    }
 
     id: navColumns
     spacing: 0  // Set the spacing between children to 0
@@ -34,7 +38,6 @@ ColumnLayout {
         id: sideView
         Layout.fillWidth: true
         Layout.preferredHeight: 100
-        pixelPer10km: navColumns.pixelPer10km
     }
 
     Rectangle {

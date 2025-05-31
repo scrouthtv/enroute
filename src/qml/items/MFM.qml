@@ -570,6 +570,10 @@ Item {
                 flightMap.center = waypoint.coordinate
             }
         }
+
+        function setMapBoundary() {
+            console.warn("Hello World!")
+        }
     }
 
     BrightnessContrast { // Graphical effects: increase contrast, reduce brightness in dark mode
@@ -881,8 +885,6 @@ Item {
 
         NavBar {
             id: navBar
-
-            pixelPer10km: flightMap.pixelPer10km
 
             Layout.fillWidth: true
             Layout.columnSpan: 3

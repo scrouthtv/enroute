@@ -41,6 +41,37 @@
 #include "GeoMapProvider.h"
 #include "SideViewQuickItem.h"
 
+// Qt does not even provide this function...
+static bool pointInPolygon(const QGeoCoordinate& point, const QVector<QGeoCoordinate>& polygon) {
+    int n = polygon.size();
+    bool inside = false;
+
+    if (n < 3) {
+        return false; // A polygon must have at least 3 vertices
+    }
+
+    double x = point.longitude();
+    double y = point.latitude();
+
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        double xi = polygon[i].longitude();
+        double yi = polygon[i].latitude();
+        double xj = polygon[j].longitude();
+        double yj = polygon[j].latitude();
+
+        // Check if the point is within the y-bounds of the edge
+        bool intersect =
+            ((yi > y) != (yj > y)) && // The edge crosses the horizontal line
+            (x < (xj - xi) * (y - yi) / (yj - yi) + xi); // The intersection occurs to the right of 'point'
+
+        if (intersect) {
+            inside = !inside; // Flip inside status
+        }
+    }
+
+    return inside;
+}
+
 Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
     : QQuickPaintedItem(parent)
 {
@@ -50,10 +81,14 @@ Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
     // any primitives after erasing.
     // TODO should I open a bug report for this???
     //setRenderTarget(QQuickPaintedItem::FramebufferObject);
+
+    // We initially don't know the route. Wait for QML to give us one.
+    route = nullptr;
 }
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
 {
+    qDebug() << "Starting painting at meter " << hMeter0;
     QElapsedTimer timer;
     timer.start();
 
@@ -80,13 +115,10 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     painter->translate(0, -widgetHeight());
 
     // Clear the paint area:
-    painter->fillRect(0, 0, widgetWidth(), widgetHeight(), Qt::white);
+    painter->eraseRect(0, 0, widgetWidth(), widgetHeight());
 
     drawSky(painter);
     qDebug() << "Sky ok at " << timer.elapsed() << "ms";
-
-    const auto navigator = GlobalObject::navigator();
-    const auto route = navigator->flightRoute();
 
     drawTerrain(painter);
     qDebug() << "Terrain ok at " << timer.elapsed() << "ms";
@@ -94,6 +126,7 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     const auto borders = intersectAirspaces();
     drawAirspaces(painter, borders);
 
+    // Test whether routes starting in an airspace work correctly.
     // Scale
     // Insert waypoints and waypoints along the way (?)
     // Plane symbol
@@ -103,16 +136,6 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // NOTAM
 
     qDebug() << "Drawing took" << timer.elapsed() << "milliseconds"; //TODO Remove
-}
-
-std::vector<QGeoCoordinate> Ui::SideViewQuickItem::getDrawpoints() {
-    std::vector<QGeoCoordinate> points;
-    for (float m = 0; m < route->lengthM(); m += hMeterPerPx) {
-        points.push_back(route->positionAtTrackM(m));
-
-        if (points.size() == widgetWidth()) break;
-    }
-    return points;
 }
 
 /*void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
@@ -155,18 +178,16 @@ void Ui::SideViewQuickItem::drawSky(QPainter *painter)
 }
 
 void Ui::SideViewQuickItem::drawTerrain(QPainter *painter) {
-    const auto coords = getDrawpoints();
-    elevations = std::vector<int>(coords.size());
+    elevations = std::vector<int>(widgetWidth());
 
     QList<QPoint> surface;
-    int x = 0;
-    for (const auto& coord : coords) {
-        auto elevation = GlobalObject::geoMapProvider()->terrainElevationAMSL(coord).toFeet();
+    for (int x = 0; x < widgetWidth(); x++) {
+        const auto coord = route->positionAtTrackM(hMeter0 + hMeterPerPx * x);
+        const auto elevation = GlobalObject::geoMapProvider()->terrainElevationAMSL(coord).toFeet();
         elevations[x] = elevation;
         int y = elevation / vFtPerPx;
         if (y < 0) y = 0;  // TODO is this okay? Or are there significant points below 0 ft?
         surface.append(QPoint(x, y));
-        x++;
     }
 
     QPainterStateGuard guard(painter);
@@ -177,7 +198,7 @@ void Ui::SideViewQuickItem::drawTerrain(QPainter *painter) {
 
     // Fill the ground below with a light brown color:
     surface.insert(0, QPoint(0, 0));
-    surface.append(QPoint(x - 1, 0));
+    surface.append(QPoint(widgetWidth(), 0));
 
     painter->setBrush(QColor(122, 98, 61));
     QPolygon poly(surface);
@@ -199,7 +220,7 @@ Ui::SideViewQuickItem::intersectAirspaces() {
 
     for (const auto& airspace : airspaces) {
         const auto& perimeter = airspace.polygon().perimeter();
-        bool inside = airspace.polygon().contains(path[0]);
+        bool inside = pointInPolygon(path[0], perimeter);
         auto borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
 
         for (std::size_t i = 1; i < path.size(); i++) {
@@ -221,23 +242,36 @@ Ui::SideViewQuickItem::intersectAirspaces() {
             // same as the last point?
             // If this weren't the case, we should also check for intersection
             // with pA = perimeter[0] and pB = perimeter[end].
+
+            // We need to first collect all intersections with this perimeter.
+            // Afterwards, we sort these intersections by distance to the start.
+            // Finally, we create a vertical border intersection for every one.
+            QVector<QGeoCoordinate> intersections;
             for (std::size_t j = 1; j < perimeter.size(); j++) {
                 const auto& pA = perimeter[j - 1];
                 const auto& pB = perimeter[j];
 
                 const auto intersection = intersect(rtA, rtB, pA, pB);
-                if (intersection) {
-                    int trackmeters = metersToRTA + rtA.distanceTo(*intersection);
+                if (intersection) intersections.push_back(*intersection);
+            }
 
-                    if (inside) {
-                        borders._leavingBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(*intersection, trackmeters);
-                        result.push_back(borders);
-                        borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
-                        inside = false;
-                    } else {
-                        borders._enteringBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(*intersection, trackmeters);
-                        inside = true;
-                    }
+            // Sort intersections by distance to the start:
+            std::sort(intersections.begin(), intersections.end(),
+                      [this, rtA, rtB](const QGeoCoordinate& a, const QGeoCoordinate& b) {
+                          return a.distanceTo(rtA) < b.distanceTo(rtB);
+                      });
+
+            // Create a vertical border for every intersection:
+            for (const auto& intersection : intersections) {
+                int trackmeters = metersToRTA + rtA.distanceTo(intersection);
+                if (inside) {
+                    borders._leavingBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(intersection, trackmeters);
+                    result.push_back(borders);
+                    borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
+                    inside = false;
+                } else {
+                    borders._enteringBorder = Ui::SideViewQuickItem::AirspaceVerticalBorder(intersection, trackmeters);
+                    inside = true;
                 }
             }
         }
@@ -252,7 +286,7 @@ Ui::SideViewQuickItem::intersectAirspaces() {
 }
 
 std::optional<QGeoCoordinate> Ui::SideViewQuickItem::intersect(const QGeoCoordinate& a1,
-  const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2) {
+  const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2) const {
     // Implementation based on https://stackoverflow.com/a/1968345 for now:
     // latitude is y
     const double a_x = a2.longitude() - a1.longitude();
@@ -428,7 +462,7 @@ const int xl, const int xr) {
 
 void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         const std::vector<Ui::SideViewQuickItem::AirspaceVerticalBorders>& borders) {
-    const int offsetWidth = 6;  // FIXME have this somewhere configurable.
+    const int offsetWidth = 6;
     const int linewidth = 2;
 
     QPainterStateGuard guard(painter);
@@ -445,11 +479,21 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
 
         int xl = 0;
         if (border._enteringBorder)
-            xl = border._enteringBorder->_trackM / hMeterPerPx;
+            xl = (border._enteringBorder->_trackM - hMeter0) / hMeterPerPx;
 
-        int xr = route->lengthM() / hMeterPerPx;
+        int xr = (route->lengthM() - hMeter0) / hMeterPerPx;
         if (border._leavingBorder)
-            xr = border._leavingBorder->_trackM / hMeterPerPx;
+            xr = (border._leavingBorder->_trackM - hMeter0) / hMeterPerPx;
+
+        if (xl < 0) {
+            if (xr < 0) continue; // skip airspaces outside the drawing area.
+            else xl = 0;
+        }
+
+        if (xr > widgetWidth()) {
+            if (xl > widgetWidth()) continue; // skip airspaces outside the drawing area.
+            else xr = widgetWidth();
+        }
 
         const auto bottom = getHBorder(border._airspace.lowerBound(), true, xl, xr);
         const auto top = getHBorder(border._airspace.upperBound(), false, xl, xr);
@@ -559,6 +603,56 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
     }
 }
 
+template <typename Iterator>
+std::optional<int> Ui::SideViewQuickItem::intersect(Iterator route,
+        const Iterator& routeEnd, const QVector<QGeoCoordinate>& mapBoundary) const {
+    static_assert(std::is_same<typename std::iterator_traits<Iterator>::value_type, QGeoCoordinate>::value,
+                  "Iterator's value type must be QGeoCoordinate");
+
+    int trackM = 0;
+    std::optional<int> result;
+    for (; (route + 1) != routeEnd; ++route) {
+        for (auto bound = mapBoundary.cbegin() + 1; bound != mapBoundary.cend(); ++bound) {
+            const auto intersection = intersect(*route, *(route + 1), *(bound - 1), *bound);
+            if (intersection) {
+                // If there is an intersection, we only want it, if it is closer, than
+                // the previous one.
+                if (!result || intersection->distanceTo(*route) < *result)
+                    result = intersection->distanceTo(*route);
+            }
+        }
+
+        if (result) return *result + trackM;
+
+        trackM += route->distanceTo(*(route + 1));
+    }
+
+    return std::nullopt;
+}
+
+std::array<int, 2>
+Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBoundary) {
+    std::array<int, 2> result;
+
+    if (pointInPolygon(route->geoPath().front(), mapBoundary)) {
+        result[0] = 0;
+    } else {
+        const auto intersection = intersect(route->geoPath().cbegin(), route->geoPath().cend(), mapBoundary);
+        if (intersection) result[0] = *intersection;
+        else result[0] = 0;
+    }
+
+    if (pointInPolygon(route->geoPath().back(), mapBoundary)) {
+        result[1] = route->lengthM();
+    } else {
+        const auto intersection = intersect(route->geoPath().crbegin(), route->geoPath().crend(), mapBoundary);
+        if (intersection) result[1] = route->lengthM() - *intersection;
+        else result[1] = route->lengthM();
+    }
+
+    return result;
+}
+
 int Ui::SideViewQuickItem::widgetHeight()
 {
     return static_cast<int>(height());
@@ -574,16 +668,65 @@ Units::Distance Ui::SideViewQuickItem::pressureAltitude() {
     return GlobalObject::positionProvider()->positionInfo().trueAltitudeAMSL();
 }
 
-void Ui::SideViewQuickItem::setPixelPer10km(const qreal& pixelPer10km) {
-    if (!std::isnormal(pixelPer10km)) {
-        qWarning() << "invalid pixelPer10km: " << pixelPer10km;
-        return;
-    }
-    qDebug() << "scale changed! to " << pixelPer10km;
-    hMeterPerPx = 10000 / pixelPer10km;
-    update();
-}
+void Ui::SideViewQuickItem::setMapBoundary(const QGeoShape& mapBoundary) {
+    if (!route) return;
 
-qreal Ui::SideViewQuickItem::pixelPer10km() const {
-    return 10000 / hMeterPerPx;
+    if (viewportHash == qHash(mapBoundary)) return;
+    viewportHash = qHash(mapBoundary);
+
+    // If possible, check which part of the route is visible (defined by
+    // the start & end in track meters).
+    int start, end;
+    const int routeEnd = route->lengthM();
+
+    switch (mapBoundary.type()) {
+        case QGeoShape::PathType: {
+            const auto& path = static_cast<const QGeoPath>(mapBoundary);
+            const auto visible = visibleRouteSection(path.path());
+            start = visible[0];
+            end = visible[1]; }
+            break;
+        case QGeoShape::PolygonType: {
+            const auto& polygon = static_cast<const QGeoPolygon>(mapBoundary);
+            const auto visible = visibleRouteSection(polygon.perimeter());
+            start = visible[0];
+            end = visible[1]; }
+            break;
+        case QGeoShape::RectangleType:
+        case QGeoShape::CircleType:
+        case QGeoShape::UnknownType:
+        default:
+            qWarning() << "Map boundary set from FlightMap is of unsupported type " << mapBoundary.type();
+            start = 0;
+            end = routeEnd;
+            break;
+    }
+
+    // Zoom in up to at most 100 m/px.
+    const int minDistance = widgetWidth() * 10;
+    if (end - start < minDistance) {
+        const int missing = minDistance - (end - start);
+        const int spaceRight = routeEnd - end;
+        const int spaceLeft = start;
+
+        if (spaceLeft + spaceRight <= missing) {
+            start = 0;
+            end = routeEnd;
+        } else if (spaceLeft < missing) {
+            start = 0;
+            end = minDistance;
+        } else if (spaceRight < missing) {
+            start = routeEnd - minDistance;
+            end = routeEnd;
+        } else {
+            start -= missing/2;
+            end += missing/2;
+        }
+    }
+
+    // Apply the new viewport:
+    hMeter0 = start;
+    hMeterPerPx = (end - start)/widgetWidth();
+
+    update();
 }

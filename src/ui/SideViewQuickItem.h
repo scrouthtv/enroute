@@ -21,6 +21,7 @@
 #pragma once
 
 #include <optional>
+#include <QGeoShape>
 #include <QQmlEngine>
 #include <QtQuick/QQuickPaintedItem>
 #include <QMutex>
@@ -55,16 +56,9 @@ public:
    */
   void paint(QPainter *painter) override;
 
-  /*! \brief Horizontal scale of the route profile.
-   *
-   * Specified in meters / pixel.
-   */
-  Q_PROPERTY(qreal pixelPer10km READ pixelPer10km WRITE setPixelPer10km)
+  Q_INVOKABLE void setMapBoundary(const QGeoShape& mapBoundary);
 
 private:
-  void setPixelPer10km(const qreal& pixelPer10km);
-  qreal pixelPer10km() const;
-
   class AirspaceVerticalBorder {
    public:
     AirspaceVerticalBorder(QGeoCoordinate intersection, int trackM) : _intersection(intersection), _trackM(trackM) {}
@@ -106,18 +100,15 @@ private:
     std::optional<AirspaceVerticalBorder> _leavingBorder;
   };
 
-  qreal hMeterPerPx = 100;
+  size_t viewportHash = 0;
+  int hMeterPerPx = 100;
+  int hMeter0 = 0;
   const float vFtPerPx = 100;
 
   Navigation::FlightRoute* route;
   std::vector<int> elevations;
 
   void drawSky(QPainter *painter);
-
-  /*! \brief Get a list of coordinates where each pixel of the route profile
-   * should be drawn.
-   */
-  std::vector<QGeoCoordinate> getDrawpoints();
 
   /*! \brief Draw the terrain.
    *
@@ -132,11 +123,20 @@ private:
 
   /*! \brief Find any airspaces our route intersects.
    *
+   * The algorithm does not evaluate whether any section of the route
+   * is inside or outside the airspace. We simply keep track of how
+   * often we entered / left the airspace. Therefore, if we miss an
+   * intersection, or register one twice, the airspaces are completely
+   * wrong afterwards.
+   *
    * Sections where the route is identical to the airspace boundary
    * are ignored and will therefore likely introduce errors into the
    * route profile. Keep in mind, that due to floating point limitations,
    * sections where the route is almost identical to the airspace boundary
    * are also ignored.
+   *
+   * Furthermore, if a route waypoint is exactly on a boundary,
+   * the airspace border is reported twice.
    *
    * TODO?
    *
@@ -182,7 +182,26 @@ private:
    * @returns Intersection point if the lines intersect, std::nullopt otherwise.
    */
   std::optional<QGeoCoordinate> intersect(const QGeoCoordinate& a1,
-    const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2);
+    const QGeoCoordinate& a2, const QGeoCoordinate& b1, const QGeoCoordinate& b2) const;
+
+  /**
+   * \brief Determine which part of the route is visible on the map.
+   *
+   * Returns the start and end point of the route. The points are expressed in terms
+   * of their track meters since the start of the route.
+   * If the entire route is visible, start and end point of the route are returned.
+   *
+   * @param mapBoundary Polygon outlining the visible map area.
+   */
+  std::array<int, 2>
+  visibleRouteSection(const QVector<QGeoCoordinate>& mapBoundary);
+
+  /*!
+   * \brief Find the intersection of the route with a polygon in a specific direction.
+   */
+  template <typename Iterator>
+  std::optional<int> intersect(Iterator route,
+    const Iterator& routeEnd, const QVector<QGeoCoordinate>& poly) const;
 
   /*! \brief Draw the borders of an airspace.
    *
