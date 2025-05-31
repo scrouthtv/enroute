@@ -44,17 +44,16 @@
 Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
     : QQuickPaintedItem(parent)
 {
-    connect(GlobalObject::positionProvider(), &Positioning::PositionProvider::positionInfoChanged, this, &QQuickItem::update);
-    setRenderTarget(QQuickPaintedItem::FramebufferObject);
+    // TODO why is this here? this breaks everything.
+    // specifically, erasing and then redrawing does not work:
+    // text objects aren't erased, and it is not possible to draw
+    // any primitives after erasing.
+    // TODO should I open a bug report for this???
+    //setRenderTarget(QQuickPaintedItem::FramebufferObject);
 }
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
 {
-    if (!mutex.tryLock()) {
-        qDebug() << "Detected multi threaded painting";
-        return;
-    }
-
     QElapsedTimer timer;
     timer.start();
 
@@ -70,28 +69,8 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // Only zoom out so far as to still fit the route:
     const int minMeterPerPx = route->lengthM() / widgetWidth();
     if (hMeterPerPx > minMeterPerPx) hMeterPerPx = minMeterPerPx;
-    qDebug() << "Painting with scale " << hMeterPerPx << "meters / px";
 
-    //painter->fillRect(0, widgetHeight(), widgetWidth(), - widgetHeight(), QColorConstants::Red);
-    //painter->eraseRect(0, widgetHeight(), widgetWidth(), - widgetHeight());
-    //qDebug() << "Drawn red";
-
-    painter->drawLine(hMeterPerPx, widgetHeight(), hMeterPerPx, 0);
-    painter->drawLine(100, widgetHeight(), 100, 0);
-    painter->drawLine(200, widgetHeight(), 200, 0);
-    painter->drawLine(y, widgetHeight(), y, 0);
-    y = (y + 10) % 400;
-    qDebug() << "Line drawn at" << hMeterPerPx << " and " << y;
-    qDebug() << painter->transform();
-
-    painter->drawText(0, widgetHeight(), QStringLiteral("hMeterPerPx: %1").arg(hMeterPerPx));
-        /*textDrawn = true;
-        painter->fillRect(0, widgetHeight(), widgetWidth(), - widgetHeight(), QColorConstants::Yellow);
-    }*/
-    mutex.unlock();
-    return;
-
-    /*QPainterStateGuard guard(painter);
+    QPainterStateGuard guard(painter);
 
     // The Qt coordinate system starts at the top left corner, with
     // y pointing downwards.
@@ -124,14 +103,14 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // NOTAM
 
     qDebug() << "Drawing took" << timer.elapsed() << "milliseconds"; //TODO Remove
-    */
 }
 
 std::vector<QGeoCoordinate> Ui::SideViewQuickItem::getDrawpoints() {
     std::vector<QGeoCoordinate> points;
-    for (double m = 0; m < route->lengthM(); m += hMeterPerPx) {
-        auto position = route->positionAtTrackM(m);
-        points.push_back(position);
+    for (float m = 0; m < route->lengthM(); m += hMeterPerPx) {
+        points.push_back(route->positionAtTrackM(m));
+
+        if (points.size() == widgetWidth()) break;
     }
     return points;
 }

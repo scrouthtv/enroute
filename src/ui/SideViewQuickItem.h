@@ -212,10 +212,6 @@ private:
   int widgetWidth();
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
-
-  bool textDrawn = false;
-  QMutex mutex;
-  int y = 0;
 };
 
 } // namespace Ui
