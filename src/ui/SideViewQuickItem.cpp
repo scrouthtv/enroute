@@ -160,10 +160,6 @@ void Ui::SideViewQuickItem::getHScale() {
 void Ui::SideViewQuickItem::getVScale() {
     vFtPerPx = GlobalObject::globalSettings()->airspaceAltitudeLimit().toFeet() /
         (widgetHeight() - 2 * padding);
-    qDebug() << "aAL" << GlobalObject::globalSettings()->airspaceAltitudeLimit().toFeet();
-    qDebug() << "h" << (widgetHeight() - 2 * padding);
-    //qDebug() << "therfore " << (GlobalObject::globalSettings()->airspaceAltitudeLimit().toFeet());
-    qDebug() << "vFtPerPx" << vFtPerPx;
 }
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
@@ -448,47 +444,41 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
         const QColor& color, const int linewidth,
         const std::optional<QList<qreal>>& dashPattern,
         const QVector<QPoint>& bottom, const QVector<QPoint>& top,
-        const std::optional<QVector<QPoint>> entering,
-        const std::optional<QVector<QPoint>> leaving) const {
-    QVector<QPolygon> lines; // Consider replacing this with pointers or refs,
-                             // to avoid copying the polygons. We only use it
-                             // inside this function to draw, anyways.
+        bool entering, bool leaving) const {
+    QPen pen(color);
+    pen.setWidth(linewidth);
+    if (dashPattern) pen.setDashPattern(*dashPattern);
+    painter->setPen(pen);
 
     if (!entering && !leaving) {
         // Only in this case, we need to draw to two separate polylines.
-        lines.push_back(bottom);
-        lines.push_back(top);
+        painter->drawPolyline(bottom);
+        painter->drawPolyline(top);
     } else if (leaving) {
         // Combine all borders into one polyline.
         QVector<QPoint> polyline;
-        polyline.reserve(bottom.size() + top.size() + leaving->size() +
-            (entering ? entering->size() : 0));
+        polyline.reserve(bottom.size() + top.size());
 
         // Append bottom (left to right):
         polyline.append(bottom);
 
-        // Don't need to append leaving, because both points
-        // are already in the top / bottom border.
-
         // Reverse append top (right to left):
-        for (auto it = top.crbegin(); it != top.crend(); ++it) {
+        for (auto it = top.crbegin(); it != top.crend(); ++it)
             polyline.append(*it);
-        }
 
         // Close the polyline, if we also enter the airspace:
         if (entering) polyline.append(bottom.front());
 
-        lines.push_back(polyline);
+        painter->drawPolyline(polyline);
     } else {
         // In this case, only entering exists.
         // Combine the three borders into one polyline.
         QVector<QPoint> polyline;
-        polyline.reserve(top.size() + entering->size() + bottom.size());
+        polyline.reserve(top.size() + bottom.size());
 
         // Reverse append top (right to left):
-        for (auto it = top.crbegin(); it != top.crend(); ++it) {
+        for (auto it = top.crbegin(); it != top.crend(); ++it)
             polyline.append(*it);
-        }
 
         // Don't need to append entering, because both points
         // are already in the bottom / top border.
@@ -496,17 +486,8 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
         // Append bottom (left to right):
         polyline.append(bottom);
 
-        lines.push_back(polyline);
+        painter->drawPolyline(polyline);
     }
-
-    // Finally, draw the polyline(s):
-    QPen pen(color);
-    pen.setWidth(linewidth);
-    if (dashPattern) pen.setDashPattern(*dashPattern);
-    painter->setPen(pen);
-
-    for (const QPolygon& poly : lines)
-        painter->drawPolyline(poly);
 }
 
 QVector<QPoint>
@@ -548,21 +529,21 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
     for (auto border : borders) {
         const auto& style = styleManager.getStyle(border._airspace.CAT());
 
-        std::optional<QVector<QPoint>> entering;
-        std::optional<QVector<QPoint>> leaving;
+        bool entering = border._enteringBorder.has_value();
+        bool leaving = border._leavingBorder.has_value();
 
         int xl = 0;
-        if (border._enteringBorder)
+        if (entering)
             xl = (border._enteringBorder->_trackM - hMeter0) / hMeterPerPx;
 
         int xr = (route->lengthM() - hMeter0) / hMeterPerPx;
-        if (border._leavingBorder)
+        if (leaving)
             xr = (border._leavingBorder->_trackM - hMeter0) / hMeterPerPx;
 
         if (xl < 0) {
             if (xr < 0) continue; // skip airspaces outside the drawing area.
             else {
-                border._enteringBorder = std::nullopt; // remove only this border.
+                entering = false; // remove only this border.
                 xl = 0;
             }
         }
@@ -570,19 +551,13 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         if (xr >= profileWidth()) {
             if (xl >= profileWidth()) continue; // skip airspaces outside the drawing area.
             else {
-                border._leavingBorder = std::nullopt; // remove only this border.
+                leaving = false; // remove only this border.
                 xr = profileWidth() - 1;
             }
         }
 
         const auto bottom = getHBorder(border._airspace.lowerBound(), true, xl, xr);
         const auto top = getHBorder(border._airspace.upperBound(), false, xl, xr);
-
-        if (border._enteringBorder)
-            entering = QVector<QPoint>({bottom.front(), top.front()});
-
-        if (border._leavingBorder)
-            leaving = QVector<QPoint>({bottom.back(), top.back()});
 
         // Fill the airspace:
         if (style._fillColor) {
@@ -614,7 +589,6 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         if (style._offsetColor) {
             // Create offset borders:
             QVector<QPoint> bO, tO;
-            std::optional<QVector<QPoint>> eO, lO;
 
             bO.reserve(bottom.size());
             tO.reserve(top.size());
@@ -625,25 +599,36 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
             for (const QPoint& pt : top)
                 tO.append(QPoint(pt.x(), pt.y() - offsetWidth / 2));
 
-            if (entering) {
-                eO.emplace();
-                eO->reserve(entering->size());
-                for (const QPoint& pt : *entering)
-                    eO->append(QPoint(pt.x() + offsetWidth / 2, pt.y()));
-            }
-
-            if (leaving) {
-                lO.emplace();
-                lO->reserve(leaving->size());
-                for (const QPoint& pt : *leaving)
-                    lO->append(QPoint(pt.x() - offsetWidth / 2, pt.y()));
-            }
-
-            // Draw the offset outline:
             QColor clr = *style._offsetColor;
             clr.setAlphaF(style._offsetOpacity);
-            drawAirspaceBorders(painter, clr, offsetWidth,
-                std::nullopt, bO, tO, eO, lO);
+
+            // Attempt to trim polyline sides according to entering, leaving
+            // border.
+            // If not possible, we simply fill the entire area with the offset
+            // color
+            if (trimBorder(&bO, entering, leaving, offsetWidth/2) &&
+                trimBorder(&tO, entering, leaving, offsetWidth/2)) {
+                // Draw the offset outline:
+                drawAirspaceBorders(painter, clr, offsetWidth,
+                    std::nullopt, bO, tO, entering, leaving);
+            } else {
+                // Fill the entire area with the offset color
+                QPainterStateGuard guard(painter);
+                painter->setPen(QColorConstants::Transparent);
+                painter->setBrush(clr);
+
+                // Merge the bottom and top to get the area defined by its borders:
+                QVector<QPoint> area;
+                area.reserve(bottom.size() + top.size());
+                area.append(bottom);
+
+                // Reverse append the top (right to left):
+                for (auto it = top.crbegin(); it != top.crend(); ++it)
+                    area.append(*it);
+
+                // Draw the area:
+                painter->drawPolygon(area);
+            }
         }
 
         // Label the airspace.
@@ -666,6 +651,50 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         drawAirspaceBorders(painter, style._lineColor, linewidth,
             style._dashPattern, bottom, top, entering, leaving);
     }
+}
+
+bool Ui::SideViewQuickItem::trimBorder(QVector<QPoint>* border, bool left, bool right, int trimWidth) const {
+    if (border->size() < 2)
+        return false;
+
+    // Remove elements that would protrude over the entering / leaving border.
+    // We have to test first, whether there are enough elements to remove.
+    // If there aren't enough elements, but the space between the first and
+    // last element is large enough (straight line), we move the first and
+    // last point over.
+    // If not, the polyline degrades to a single vertical line, the
+    // draw width of which needs to be adjusted accordingly.
+    if (left && right) {
+        if (border->size() > 2 * trimWidth) {
+            for (int i = 0; i < trimWidth; i++) {
+                border->pop_front();
+                border->pop_back();
+            }
+            return true;
+        } else if (border->front().x() + 2 * trimWidth < border->back().x()) {
+            border->front().setX(border->front().x() + trimWidth);
+            border->back().setX(border->back().x() - trimWidth);
+            return true;
+        } else return false;  // not enough space to trim.
+    } else if (left) {
+        if (border->size() > trimWidth) {
+            for (int i = 0; i < trimWidth; i++)
+                border->pop_front();
+            return true;
+        } else if (border->front().x() + trimWidth < border->back().x()) {
+            border->front().setX(border->front().x() + trimWidth);
+            return true;
+        } else return false;  // not enough space to trim.
+    } else if (right) {
+        if (border->size() > trimWidth) {
+            for (int i = 0; i < trimWidth; i++)
+                border->pop_back();
+            return true;
+        } else if (border->front().x() + trimWidth < border->back().x()) {
+            border->back().setX(border->back().x() - trimWidth);
+            return true;
+        } else return false;  // not enough space to trim.
+    } else return true; // nothing to trim.
 }
 
 template <typename Iterator>

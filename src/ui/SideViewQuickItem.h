@@ -215,18 +215,39 @@ private:
     const Iterator& routeEnd, const QVector<QGeoCoordinate>& poly) const;
 
   /*! \brief Draw the borders of an airspace.
+   * The top and bottom borders may either be:
+   * - a straight line, defined by two points (first and last, sorted from
+   *   left to right)
+   * - a polyline, defined by a list of points, which are exactly (!) one
+   *   horizontal pixel apart and sorted from left to right.
+   * If these assumptions are not met, the offset line is rendered wrongly.
+   *
+   * The left and right border are implicitely defined by each first / last
+   * point of the top and bottom border.
    *
    * @param bottom Bottom border with points sorted from left to right.
    * @param top Top border with points sorted from left to right.
-   * @param entering Left border (if it exists) with points sorted from bottom to top.
-   * @param leaving Right border (if it exists) with points sorted from bottom to top.
+   * @param entering Whether to draw the left border.
+   * @param leaving Whether to draw the right border.
    */
   void drawAirspaceBorders(QPainter *painter,
     const QColor& color, const int linewidth,
     const std::optional<QList<qreal>>& dashPattern,
     const QVector<QPoint>& bottom, const QVector<QPoint>& top,
-    const std::optional<QVector<QPoint>> entering,
-    const std::optional<QVector<QPoint>> leaving) const;
+    bool entering, bool leaving) const;
+
+  /*! \brief Attempt to trim a horizontal airspace border.
+   *
+   * If the border is a straight line, defined by two points,
+   * the left / right points are moved inwards.
+   * If there isn't enough horizontal space, we return false.
+   *
+   * If the border is a polyline, defined by a number of points,
+   * the first / last trimWidth number of points are deleted.
+   * If there aren't enough points, we return false.
+   */
+  bool trimBorder(QVector<QPoint>* border,
+    bool left, bool right, int trimWidth) const;
 
   /*! \brief Draw the airspace borders.
    *
