@@ -168,7 +168,6 @@ void Ui::SideViewQuickItem::getVScale() {
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
 {
-    qDebug() << "Starting painting";
     QElapsedTimer timer;
     timer.start();
 
@@ -205,18 +204,24 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     painter->translate(profileStart(), -widgetHeight() + padding);
 
     drawSky(painter);
-    qDebug() << "Sky ok at " << timer.elapsed() << "ms";
 
     drawVScale(painter);
 
     drawTerrain(painter);
-    qDebug() << "Terrain ok at " << timer.elapsed() << "ms";
+
+    // Clip airspace drawings:
+    painter->setClipRect(0, 0, profileWidth(), widgetHeight() - 2 * padding);
 
     const auto borders = intersectAirspaces();
     drawAirspaces(painter, borders);
 
+    painter->setClipping(false);
+
+    markWaypoints(painter);
+
+    // TODO
     // Test whether routes starting in an airspace work correctly.
-    // Scale
+    // Horizontal Scale?
     // Insert waypoints and waypoints along the way (?)
     // Plane symbol
     // Weather
@@ -224,7 +229,7 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // Show related position on map
     // NOTAM
 
-    qDebug() << "Drawing took" << timer.elapsed() << "milliseconds"; //TODO Remove
+    qDebug() << timer.elapsed() << "milliseconds"; //TODO Remove
 }
 
 /*void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
@@ -749,6 +754,14 @@ Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBou
     }
 
     return result;
+}
+
+void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
+    for (const auto& wp : route->waypoints()) {
+        qDebug() << "ext: " << wp.extendedName();
+        qDebug() << "icao: " << wp.ICAOCode();
+        qDebug() << "name: " << wp.name();
+    }
 }
 
 void Ui::SideViewQuickItem::drawText(QPainter *painter, int x, int y,

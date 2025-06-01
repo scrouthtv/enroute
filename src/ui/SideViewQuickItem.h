@@ -259,6 +259,8 @@ private:
   void drawAirspaces(QPainter *painter,
     const std::vector<AirspaceVerticalBorders>& borders);
 
+  void markWaypoints(QPainter *painter) const;
+
   /*! \brief Helper function to draw text.
    *
    * Text is drawn *anchored* at a specified point.
@@ -266,8 +268,7 @@ private:
    */
   void drawText(QPainter *painter, int x, int y, const QString& text,
     QFlags<Qt::AlignmentFlag> align = Qt::AlignLeft | Qt::AlignTop,
-    int w = 100,
-    int h = 20) const;
+    int w = 100, int h = 20) const;
 
   int widgetHeight() const;
   int widgetWidth() const;
