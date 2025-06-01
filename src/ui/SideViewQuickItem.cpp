@@ -204,16 +204,6 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
 
 /*void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
 {
-    drawSky(painter);
-
-    // Define gradient for the ground
-    QLinearGradient groundGradient(0, widgetHeight() * 0.8, 0, widgetHeight());
-    groundGradient.setColorAt(0.0, QColor(139, 69, 19));   // SaddleBrown at the top
-    groundGradient.setColorAt(1.0, QColor(210, 180, 140)); // Tan at the bottom
-
-    // Fill the ground with the ground gradient
-    painter->fillRect(0, widgetHeight() * 0.8, widgetWidth(), widgetHeight(), groundGradient);
-
     // Draw a semi-transparent overlay
     painter->fillRect(0, 0, widgetWidth(), widgetHeight(), QColor(0, 0, 0, 50));
 
