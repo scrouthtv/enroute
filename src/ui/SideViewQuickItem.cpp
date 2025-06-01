@@ -108,13 +108,17 @@ void Ui::SideViewQuickItem::getHScale() {
     switch (_mapBoundary.type()) {
         case QGeoShape::PathType: {
             const auto& path = static_cast<const QGeoPath>(_mapBoundary);
-            const auto visible = visibleRouteSection(path.path());
+            auto bounds = path.path();
+            bounds.push_back(bounds.front());  // close the polygon
+            const auto visible = visibleRouteSection(bounds);
             start = visible[0];
             end = visible[1]; }
             break;
         case QGeoShape::PolygonType: {
             const auto& polygon = static_cast<const QGeoPolygon>(_mapBoundary);
-            const auto visible = visibleRouteSection(polygon.perimeter());
+            auto bounds = polygon.perimeter();
+            bounds.push_back(bounds.front());  // close the polygon
+            const auto visible = visibleRouteSection(bounds);
             start = visible[0];
             end = visible[1]; }
             break;
