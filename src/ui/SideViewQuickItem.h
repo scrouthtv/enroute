@@ -229,8 +229,8 @@ private:
   void drawAirspaces(QPainter *painter,
     const std::vector<AirspaceVerticalBorders>& borders);
 
-  int widgetHeight();
-  int widgetWidth();
+  int widgetHeight() const;
+  int widgetWidth() const;
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
 };

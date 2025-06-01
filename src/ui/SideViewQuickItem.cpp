@@ -39,7 +39,6 @@
 #include "Navigator.h"
 #include "PositionProvider.h"
 #include "PositionInfo.h"
-#include "GeoMapProvider.h"
 #include "SideViewQuickItem.h"
 
 // Qt does not even provide this function...
@@ -124,7 +123,7 @@ void Ui::SideViewQuickItem::getHScale() {
             break;
     }
 
-    // Zoom in up to at most 100 m/px.
+    // Zoom in up to at most 10 m/px.
     const int minDistance = widgetWidth() * 10;
     if (end - start < minDistance) {
         const int missing = minDistance - (end - start);
@@ -409,7 +408,7 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
                              // inside this function to draw, anyways.
 
     if (!entering && !leaving) {
-        // Only in this case, we need to draw to separate polylines.
+        // Only in this case, we need to draw to two separate polylines.
         lines.push_back(bottom);
         lines.push_back(top);
     } else if (leaving) {
@@ -418,21 +417,19 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
         polyline.reserve(bottom.size() + top.size() + leaving->size() +
             (entering ? entering->size() : 0));
 
-        // Append bottom (left to right) and right (bottom to top):
+        // Append bottom (left to right):
         polyline.append(bottom);
-        polyline.append(*leaving);
+
+        // Don't need to append leaving, because both points
+        // are already in the top / bottom border.
 
         // Reverse append top (right to left):
         for (auto it = top.crbegin(); it != top.crend(); ++it) {
             polyline.append(*it);
         }
 
-        // Reverse append entering (top to bottom), if it exists:
-        if (entering) {
-            for (auto it = entering->crbegin(); it != entering->crend(); ++it) {
-                polyline.append(*it);
-            }
-        }
+        // Close the polyline, if we also enter the airspace:
+        if (entering) polyline.append(bottom.front());
 
         lines.push_back(polyline);
     } else {
@@ -446,10 +443,8 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
             polyline.append(*it);
         }
 
-        // Reverse append entering (top to bottom):
-        for (auto it = entering->crbegin(); it != entering->crend(); ++it) {
-            polyline.append(*it);
-        }
+        // Don't need to append entering, because both points
+        // are already in the bottom / top border.
 
         // Append bottom (left to right):
         polyline.append(bottom);
@@ -464,36 +459,8 @@ void Ui::SideViewQuickItem::drawAirspaceBorders(QPainter *painter,
     painter->setPen(pen);
 
     for (const QPolygon& poly : lines)
-        painter->drawPolygon(poly);
+        painter->drawPolyline(poly);
 }
-
-/*void Ui::SideViewQuickItem::drawAirspaceVBorder(QPainter *painter,
-        const Ui::SideViewQuickItem::AirspaceVerticalBorder& border,
-        bool entering, const Ui::AirspaceStyle& style) {
-    const int x = border._trackM / hMeterPerPx;
-
-    // 1. Draw the offset border:
-    if (style._offsetColor) {
-        QColor clr = *style._offsetColor;
-        clr.setAlphaF(style._offsetOpacity);
-        QPen pen(clr);
-        pen.setWidth(offsetWidth);
-        painter->setPen(pen);
-        int tempx = x;
-        if (entering) tempx += offsetWidth/2;
-        else tempx -= offsetWidth/2;
-        painter->drawLine(tempx, 0, tempx, widgetHeight());
-    }
-
-    // 2. Draw the line:
-    QPen pen(style._lineColor);
-    if (style._dashPattern) {
-        pen.setDashPattern(*style._dashPattern);
-    }
-    pen.setWidth(linewidth);
-    painter->setPen(pen);
-    painter->drawLine(x, 0, x, widgetHeight());
-}*/
 
 QVector<QPoint>
 Ui::SideViewQuickItem::getHBorder(const QString& boundary, bool lower,
@@ -536,7 +503,7 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
     painter->setFont(font);
 
     const StyleManager styleManager;  // FIXME avoid costly relocation of this by using singletons.
-    for (const auto& border : borders) {
+    for (auto border : borders) {
         const auto& style = styleManager.getStyle(border._airspace.CAT());
 
         std::optional<QVector<QPoint>> entering;
@@ -552,12 +519,18 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
 
         if (xl < 0) {
             if (xr < 0) continue; // skip airspaces outside the drawing area.
-            else xl = 0;
+            else {
+                border._enteringBorder = std::nullopt; // remove only this border.
+                xl = 0;
+            }
         }
 
-        if (xr > widgetWidth()) {
-            if (xl > widgetWidth()) continue; // skip airspaces outside the drawing area.
-            else xr = widgetWidth();
+        if (xr >= widgetWidth()) {
+            if (xl >= widgetWidth()) continue; // skip airspaces outside the drawing area.
+            else {
+                border._leavingBorder = std::nullopt; // remove only this border.
+                xr = widgetWidth() - 1;
+            }
         }
 
         const auto bottom = getHBorder(border._airspace.lowerBound(), true, xl, xr);
@@ -718,12 +691,12 @@ Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBou
     return result;
 }
 
-int Ui::SideViewQuickItem::widgetHeight()
+int Ui::SideViewQuickItem::widgetHeight() const
 {
     return static_cast<int>(height());
 }
 
-int Ui::SideViewQuickItem::widgetWidth()
+int Ui::SideViewQuickItem::widgetWidth() const
 {
     return static_cast<int>(width());
 }
