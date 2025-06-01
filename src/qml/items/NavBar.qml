@@ -37,7 +37,7 @@ ColumnLayout {
     SideView {
         id: sideView
         Layout.fillWidth: true
-        Layout.preferredHeight: 100
+        Layout.preferredHeight: 110
     }
 
     Rectangle {

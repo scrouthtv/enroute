@@ -101,16 +101,25 @@ private:
 
   int hMeterPerPx = 100;
   int hMeter0 = 0;
-  const float vFtPerPx = 100;
+  int vFtPerPx = 100;
 
   Navigation::FlightRoute* route;
   std::vector<int> elevations;
 
-  /*! \brief Get the scale to use for route profile drawing, based on the viewport of the main map.
+  /*! \brief Evaluate the horizontal scale to use for route profile drawing.
+   * The scale is selected as to show the currently visible section of the route.
    */
   void getHScale();
 
+  /*! \brief Evaluate the vertical scale to use for route profile drawing.
+   * The vertical scale is selected to fit the profile from ground to
+   * the currently configured airspace altitude limit.
+   */
+  void getVScale();
+
   void drawSky(QPainter *painter);
+
+  void drawVScale(QPainter *painter);
 
   /*! \brief Draw the terrain.
    *
@@ -229,8 +238,24 @@ private:
   void drawAirspaces(QPainter *painter,
     const std::vector<AirspaceVerticalBorders>& borders);
 
+  /*! \brief Helper function to draw text.
+   *
+   * Text is drawn *anchored* at a specified point.
+   * The text box may be limited in width and or height.
+   */
+  void drawText(QPainter *painter, int x, int y, const QString& text,
+    QFlags<Qt::AlignmentFlag> align = Qt::AlignLeft | Qt::AlignTop,
+    int w = 100,
+    int h = 20) const;
+
   int widgetHeight() const;
   int widgetWidth() const;
+
+  const int padding = 5;
+  const int scaleWidth = 50;
+  int profileWidth() const;
+  int profileStart() const;
+
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
 };
