@@ -34,6 +34,7 @@
 #include <QVector>
 #include <set>
 
+#include "GeoMapProvider.h"
 #include "GlobalObject.h"
 #include "Navigator.h"
 #include "PositionProvider.h"
@@ -82,8 +83,74 @@ Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
     // TODO should I open a bug report for this???
     //setRenderTarget(QQuickPaintedItem::FramebufferObject);
 
-    // We initially don't know the route. Wait for QML to give us one.
-    route = nullptr;
+    route = GlobalObject::navigator()->flightRoute();
+
+    // We use this data:
+    // - Base map (elevation)
+    // - Route
+    // - Airspaces
+    // Whenever any of these change, we need to redraw.
+    //connect(GlobalObject::geoMapProvider(),
+        //&GeoMaps::GeoMapProvider::terrainMapTilesChanged,
+        //this, &SideViewQuickItem::setDirty);
+}
+
+void Ui::SideViewQuickItem::getHScale() {
+    // If possible, check which part of the route is visible (defined by
+    // the start & end in track meters).
+    int start, end;
+    const int routeEnd = route->lengthM();
+
+    switch (_mapBoundary.type()) {
+        case QGeoShape::PathType: {
+            const auto& path = static_cast<const QGeoPath>(_mapBoundary);
+            const auto visible = visibleRouteSection(path.path());
+            start = visible[0];
+            end = visible[1]; }
+            break;
+        case QGeoShape::PolygonType: {
+            const auto& polygon = static_cast<const QGeoPolygon>(_mapBoundary);
+            const auto visible = visibleRouteSection(polygon.perimeter());
+            start = visible[0];
+            end = visible[1]; }
+            break;
+        case QGeoShape::RectangleType:
+        case QGeoShape::CircleType:
+        case QGeoShape::UnknownType:
+        default:
+            qWarning() << "Map boundary set from FlightMap is of unsupported type " << _mapBoundary.type();
+            start = 0;
+            end = routeEnd;
+            break;
+    }
+
+    // Zoom in up to at most 100 m/px.
+    const int minDistance = widgetWidth() * 10;
+    if (end - start < minDistance) {
+        const int missing = minDistance - (end - start);
+        const int spaceRight = routeEnd - end;
+        const int spaceLeft = start;
+
+        if (spaceLeft + spaceRight <= missing) {
+            start = 0;
+            end = routeEnd;
+        } else if (spaceLeft < missing) {
+            start = 0;
+            end = minDistance;
+        } else if (spaceRight < missing) {
+            start = routeEnd - minDistance;
+            end = routeEnd;
+        } else {
+            start -= missing/2;
+            end += missing/2;
+        }
+    }
+
+    // Apply the new viewport:
+    if (hMeter0 != start || hMeterPerPx != (end - start)/widgetWidth()) {
+        hMeter0 = start;
+        hMeterPerPx = (end - start)/widgetWidth();
+    }
 }
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
@@ -97,13 +164,11 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
         // TODO Show error message
         qWarning() << "No route";
         return;
-    } else {
+    } else if (GlobalObject::navigator()->flightRoute() != route) {
         route = GlobalObject::navigator()->flightRoute();
     }
 
-    // Only zoom out so far as to still fit the route:
-    const int minMeterPerPx = route->lengthM() / widgetWidth();
-    if (hMeterPerPx > minMeterPerPx) hMeterPerPx = minMeterPerPx;
+    getHScale();
 
     QPainterStateGuard guard(painter);
 
@@ -669,64 +734,7 @@ Units::Distance Ui::SideViewQuickItem::pressureAltitude() {
 }
 
 void Ui::SideViewQuickItem::setMapBoundary(const QGeoShape& mapBoundary) {
-    if (!route) return;
-
-    if (viewportHash == qHash(mapBoundary)) return;
-    viewportHash = qHash(mapBoundary);
-
-    // If possible, check which part of the route is visible (defined by
-    // the start & end in track meters).
-    int start, end;
-    const int routeEnd = route->lengthM();
-
-    switch (mapBoundary.type()) {
-        case QGeoShape::PathType: {
-            const auto& path = static_cast<const QGeoPath>(mapBoundary);
-            const auto visible = visibleRouteSection(path.path());
-            start = visible[0];
-            end = visible[1]; }
-            break;
-        case QGeoShape::PolygonType: {
-            const auto& polygon = static_cast<const QGeoPolygon>(mapBoundary);
-            const auto visible = visibleRouteSection(polygon.perimeter());
-            start = visible[0];
-            end = visible[1]; }
-            break;
-        case QGeoShape::RectangleType:
-        case QGeoShape::CircleType:
-        case QGeoShape::UnknownType:
-        default:
-            qWarning() << "Map boundary set from FlightMap is of unsupported type " << mapBoundary.type();
-            start = 0;
-            end = routeEnd;
-            break;
-    }
-
-    // Zoom in up to at most 100 m/px.
-    const int minDistance = widgetWidth() * 10;
-    if (end - start < minDistance) {
-        const int missing = minDistance - (end - start);
-        const int spaceRight = routeEnd - end;
-        const int spaceLeft = start;
-
-        if (spaceLeft + spaceRight <= missing) {
-            start = 0;
-            end = routeEnd;
-        } else if (spaceLeft < missing) {
-            start = 0;
-            end = minDistance;
-        } else if (spaceRight < missing) {
-            start = routeEnd - minDistance;
-            end = routeEnd;
-        } else {
-            start -= missing/2;
-            end += missing/2;
-        }
-    }
-
-    // Apply the new viewport:
-    hMeter0 = start;
-    hMeterPerPx = (end - start)/widgetWidth();
+    _mapBoundary = mapBoundary;
 
     update();
 }

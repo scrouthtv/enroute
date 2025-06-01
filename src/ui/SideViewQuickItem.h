@@ -29,9 +29,6 @@
 
 #include "AirspaceStyling.h"
 #include "FlightRoute.h"
-#include "GlobalObject.h"
-#include "PositionInfo.h"
-#include "GeoMapProvider.h"
 
 namespace Ui {
 
@@ -100,13 +97,18 @@ private:
     std::optional<AirspaceVerticalBorder> _leavingBorder;
   };
 
-  size_t viewportHash = 0;
+  QGeoShape _mapBoundary;
+
   int hMeterPerPx = 100;
   int hMeter0 = 0;
   const float vFtPerPx = 100;
 
   Navigation::FlightRoute* route;
   std::vector<int> elevations;
+
+  /*! \brief Get the scale to use for route profile drawing, based on the viewport of the main map.
+   */
+  void getHScale();
 
   void drawSky(QPainter *painter);
 
