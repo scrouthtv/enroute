@@ -26,6 +26,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPainterStateGuard>
 #include <QPen>
 #include <QPoint>
@@ -163,7 +164,7 @@ void Ui::SideViewQuickItem::getHScale() {
 
 void Ui::SideViewQuickItem::getVScale() {
     vFtPerPx = GlobalObject::globalSettings()->airspaceAltitudeLimit().toFeet() /
-        (widgetHeight() - 2 * padding);
+        (profileHeight());
 }
 
 void Ui::SideViewQuickItem::paint(QPainter *painter)
@@ -201,7 +202,7 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // Furthermore, we shift our coordinate system to the right to create
     // some space for the vertical scale.
     painter->scale(1, -1);
-    painter->translate(profileStart(), -widgetHeight() + padding);
+    painter->translate(2 * padding + scaleWidth, -widgetHeight() + padding);
 
     drawSky(painter);
 
@@ -210,7 +211,10 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     drawTerrain(painter);
 
     // Clip airspace drawings:
-    painter->setClipRect(0, 0, profileWidth(), widgetHeight() - 2 * padding);
+    // TODO maybe this clip can also replace all the logic in
+    // drawAirspaceBorders() regarding the different cases of airspaces having
+    // a border?
+    painter->setClipRect(0, 0, profileWidth(), profileHeight());
 
     const auto borders = intersectAirspaces();
     drawAirspaces(painter, borders);
@@ -228,8 +232,9 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // Zoom + Move
     // Show related position on map
     // NOTAM
+    // Approach routes
 
-    qDebug() << timer.elapsed() << "milliseconds"; //TODO Remove
+    //qDebug() << timer.elapsed() << "milliseconds"; //TODO Remove
 }
 
 /*void Ui::SideViewQuickItem::drawNoTrackAvailable(QPainter *painter)
@@ -258,7 +263,7 @@ void Ui::SideViewQuickItem::drawSky(QPainter *painter)
 {
     // Fill the background with a solid color:
     QColor sky(144, 213, 255);
-    painter->fillRect(0, 0, profileWidth(), widgetHeight() - 2 * padding, sky);
+    painter->fillRect(0, 0, profileWidth(), profileHeight(), sky);
 }
 
 void Ui::SideViewQuickItem::drawVScale(QPainter *painter) {
@@ -281,14 +286,15 @@ void Ui::SideViewQuickItem::drawVScale(QPainter *painter) {
 
     // Draw the labels:
     int y = 0, height = 0;
-    while (y < widgetHeight() - 2 * padding) {
+    while (y < profileHeight()) {
         y = height / vFtPerPx;
         QFlags<Qt::AlignmentFlag> align = Qt::AlignRight;
         /*if (y == 0) align |= Qt::AlignBottom;
-        else if (y >= widgetHeight() - 2 * padding) align |= Qt::AlignTop;
+        else if (y >= profileHeight()) align |= Qt::AlignTop;
         else*/ align |= Qt::AlignVCenter;
 
-        drawText(painter, -padding, y, QString("%1 ft").arg(height), align);
+        drawText(painter, -padding, y, QString("%1 ft").arg(height),
+            QColorConstants::Black, true, align);
         height += scale;
     }
 }
@@ -646,14 +652,10 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         {
             const int cx = (xl + xr) / 2;
             const int cy = (bottom.front().y() + top.front().y() + bottom.back().y() + top.back().y()) / 4;
-            const int w = xr - xl;
-
-            // Height is the average height of the top and bottom borders:
-            const int h = (top.front().y() - bottom.front().y() +
-                top.back().y() - bottom.back().y()) / 2;
 
             painter->setPen(QColorConstants::Black);
-            drawText(painter, cx, cy, border._airspace.CAT(), Qt::AlignCenter, w, h);
+            drawText(painter, cx, cy, border._airspace.CAT(),
+                QColorConstants::Black, true, Qt::AlignCenter);
         }
 
         // Draw the borders:
@@ -757,42 +759,59 @@ Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBou
 }
 
 void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
+
+    int m = 0;
+    auto& last = route->waypoints().front();
+
     for (const auto& wp : route->waypoints()) {
-        qDebug() << "ext: " << wp.extendedName();
-        qDebug() << "icao: " << wp.ICAOCode();
-        qDebug() << "name: " << wp.name();
+        m += wp.coordinate().distanceTo(last.coordinate());
+        QString label = wp.ICAOCode();
+        if (label == "") label = wp.name();
+
+        int x = (m - hMeter0) / hMeterPerPx;
+        painter->setPen(QColorConstants::Black);
+        painter->drawLine(x, 0, x, profileHeight());
+        painter->setPen(QColorConstants::White);
+        drawText(painter, x, profileHeight() + padding, label,
+            QColorConstants::Black, true, Qt::AlignHCenter | Qt::AlignBottom);
+
+        last = wp;
     }
 }
 
 void Ui::SideViewQuickItem::drawText(QPainter *painter, int x, int y,
-        const QString& text, QFlags<Qt::AlignmentFlag> align, int w, int h) const {
+        const QString& text, QColor color, bool halo,
+        QFlags<Qt::AlignmentFlag> align) const {
     // We need to reset the scale to (1, 1) or the text itself will be
     // scaled ( = flipped) as well. However, first we need to move the
     // origin to the center of the text.
     painter->save();  // FIXME this saves a whole lot of uninteresting
                         // information, maybe we can save on performance??
                         // transform() does not give the original translation...
+    painter->setRenderHints(QPainter::TextAntialiasing | QPainter::Antialiasing);
+    QPainterPath path;
+    path.addText(0, 0, painter->font(), text);
+
+    const float w = path.boundingRect().width();
+    const float h = path.boundingRect().height();
+
+    if (align & Qt::AlignHCenter) x -= w/2.0;
+    else if (align & Qt::AlignRight) x -= w;
+
+    if (align & Qt::AlignVCenter) y -= h/2.0;
+    else if (align & Qt::AlignTop) y -= h;
+
     painter->translate(x, y);
     painter->scale(1, -1);
 
-    // TODO draw a white halo / border around the text.
-    // This does not seem to be trivial, e.g.
-    // https://stackoverflow.com/a/17517453
+    if (halo) {
+        painter->setPen(QPen(QColorConstants::White, 3));
+        painter->drawPath(path);
+    }
 
-    // painter->drawText takes the top left corner, no matter which
-    // orientation we use.
-    // Therefore we have to calculate the top left corner:
-    // The top left corner is calculated relative to (x, y) as we already translated
-    // to that point.
-    int left = 0;
-    if (align & Qt::AlignHCenter) left -= w/2;
-    else if (align & Qt::AlignRight) left -= w;
-
-    int top = 0;
-    if (align & Qt::AlignVCenter) top -= h/2;
-    else if (align & Qt::AlignBottom) top -= h;
-
-    painter->drawText(left, top, w, h, align, text);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QColorConstants::Black);
+    painter->drawPath(path);
 
     // Restore the earlier transformation:
     painter->restore();
@@ -813,9 +832,9 @@ int Ui::SideViewQuickItem::profileWidth() const
     return widgetWidth() - padding * 3 - scaleWidth;
 }
 
-int Ui::SideViewQuickItem::profileStart() const
+int Ui::SideViewQuickItem::profileHeight() const
 {
-    return 2 * padding + scaleWidth;
+    return widgetHeight() - 2 * padding - textHeight;
 }
 
 Units::Distance Ui::SideViewQuickItem::pressureAltitude() {

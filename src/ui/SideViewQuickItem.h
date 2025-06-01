@@ -267,16 +267,17 @@ private:
    * The text box may be limited in width and or height.
    */
   void drawText(QPainter *painter, int x, int y, const QString& text,
-    QFlags<Qt::AlignmentFlag> align = Qt::AlignLeft | Qt::AlignTop,
-    int w = 100, int h = 20) const;
+    QColor color, bool halo,
+    QFlags<Qt::AlignmentFlag> align = Qt::AlignLeft | Qt::AlignTop) const;
 
   int widgetHeight() const;
   int widgetWidth() const;
 
   const int padding = 5;
   const int scaleWidth = 50;
+  const int textHeight = 20;
   int profileWidth() const;
-  int profileStart() const;
+  int profileHeight() const;
 
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
