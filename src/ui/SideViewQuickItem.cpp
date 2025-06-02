@@ -85,6 +85,8 @@ Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
     //setRenderTarget(QQuickPaintedItem::FramebufferObject);
 
     route = GlobalObject::navigator()->flightRoute();
+    connect(route, &Navigation::FlightRoute::waypointsChanged,
+        this, &QQuickItem::update);
 
     // We use this data:
     // - Base map (elevation)
@@ -178,8 +180,10 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
         qWarning() << "No route";
         return;
     } else if (GlobalObject::navigator()->flightRoute() != route) {
-        route = GlobalObject::navigator()->flightRoute();
+        qWarning() << "route changed";
     }
+
+    if (route->waypoints().size() < 2) return;
 
     QPainterStateGuard guard(painter);
 
@@ -380,7 +384,7 @@ Ui::SideViewQuickItem::intersectAirspaces() {
             // Sort intersections by distance to the start:
             std::sort(intersections.begin(), intersections.end(),
                       [this, rtA, rtB](const QGeoCoordinate& a, const QGeoCoordinate& b) {
-                          return a.distanceTo(rtA) < b.distanceTo(rtB);
+                          return a.distanceTo(rtA) < b.distanceTo(rtA);
                       });
 
             // Create a vertical border for every intersection:
@@ -396,9 +400,10 @@ Ui::SideViewQuickItem::intersectAirspaces() {
                     inside = true;
                 }
             }
+
         }
 
-        // Add last border if we enter but do not leave the airspace at the end:
+        // Push last border if we entered but did not leave the airspace at the end:
         if (inside && borders._enteringBorder) {
             result.push_back(borders);
         }
@@ -555,8 +560,8 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
         if (leaving)
             xr = (border._leavingBorder->_trackM - hMeter0) / hMeterPerPx;
 
-        if (xl < 0) {
-            if (xr < 0) continue; // skip airspaces outside the drawing area.
+        if (xl <= 0) {
+            if (xr <= 0) continue; // skip airspaces outside the drawing area.
             else {
                 entering = false; // remove only this border.
                 xl = 0;
@@ -573,6 +578,12 @@ void Ui::SideViewQuickItem::drawAirspaces(QPainter *painter,
 
         const auto bottom = getHBorder(border._airspace.lowerBound(), true, xl, xr);
         const auto top = getHBorder(border._airspace.upperBound(), false, xl, xr);
+
+        if (bottom.isEmpty() || top.isEmpty()) {
+            // TODO
+            qWarning() << border._airspace.name() << "is empty. Skipping";
+            continue;
+        }
 
         // Fill the airspace:
         if (style._fillColor) {
