@@ -29,7 +29,9 @@
 #include <QPainterPath>
 #include <QPainterStateGuard>
 #include <QPen>
+#include <QPolygonF>
 #include <QPoint>
+#include <QPointF>
 #include <QRect>
 #include <QtConcurrent>
 #include <QVector>
@@ -208,6 +210,8 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     painter->scale(1, -1);
     painter->translate(2 * padding + scaleWidth, -widgetHeight() + padding);
 
+    painter->setRenderHints(QPainter::TextAntialiasing | QPainter::Antialiasing);
+
     drawSky(painter);
 
     drawVScale(painter);
@@ -304,16 +308,16 @@ void Ui::SideViewQuickItem::drawVScale(QPainter *painter) {
 }
 
 void Ui::SideViewQuickItem::drawTerrain(QPainter *painter) {
-    elevations = std::vector<int>(widgetWidth());
+    elevations.resize(profileWidth());
 
-    QList<QPoint> surface;
+    QList<QPointF> surface;
     for (int x = 0; x < profileWidth(); x++) {
         const auto coord = route->positionAtTrackM(hMeter0 + hMeterPerPx * x);
         const auto elevation = GlobalObject::geoMapProvider()->terrainElevationAMSL(coord).toFeet();
         elevations[x] = elevation;
-        int y = elevation / vFtPerPx;
+        qreal y = elevation / vFtPerPx;
         if (y < 0) y = 0;  // TODO is this okay? Or are there significant points below 0 ft?
-        surface.append(QPoint(x, y));
+        surface.append(QPointF(x, y));
     }
 
     QPainterStateGuard guard(painter);
@@ -327,7 +331,7 @@ void Ui::SideViewQuickItem::drawTerrain(QPainter *painter) {
     surface.append(QPoint(profileWidth(), 0));
 
     painter->setBrush(QColor(122, 98, 61));
-    QPolygon poly(surface);
+    QPolygonF poly(surface);
     painter->drawPolygon(poly);
 }
 
@@ -344,7 +348,12 @@ Ui::SideViewQuickItem::intersectAirspaces() {
     // Get all relevant airspaces:
     const auto airspaces = GlobalObject::geoMapProvider()->airspaces(route->boundingRectangle());
 
+    // Get whether glider sectors should be shown:
+    const bool hideGlideSectors = GlobalObject::globalSettings()->hideGlidingSectors();
+
     for (const auto& airspace : airspaces) {
+        if (airspace.CAT() == "GLD" && hideGlideSectors) continue;
+
         const auto& perimeter = airspace.polygon().perimeter();
         bool inside = pointInPolygon(path[0], perimeter);
         auto borders = Ui::SideViewQuickItem::AirspaceVerticalBorders(airspace);
@@ -783,8 +792,12 @@ void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
         painter->setPen(QColorConstants::Black);
         painter->drawLine(x, 0, x, profileHeight());
         painter->setPen(QColorConstants::White);
+        QFlags<Qt::AlignmentFlag> align = Qt::AlignBottom;
+        if (x < 20) align |= Qt::AlignLeft;
+        else if (x > profileWidth() - 20) align |= Qt::AlignRight;
+        else align |= Qt::AlignHCenter;
         drawText(painter, x, profileHeight() + padding, label,
-            QColorConstants::Black, true, Qt::AlignHCenter | Qt::AlignBottom);
+            QColorConstants::Black, true, align);
 
         last = wp;
     }
@@ -799,7 +812,6 @@ void Ui::SideViewQuickItem::drawText(QPainter *painter, int x, int y,
     painter->save();  // FIXME this saves a whole lot of uninteresting
                         // information, maybe we can save on performance??
                         // transform() does not give the original translation...
-    painter->setRenderHints(QPainter::TextAntialiasing | QPainter::Antialiasing);
     QPainterPath path;
     path.addText(0, 0, painter->font(), text);
 
