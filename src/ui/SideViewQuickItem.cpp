@@ -33,17 +33,19 @@
 #include <QPoint>
 #include <QPointF>
 #include <QRect>
-#include <QtConcurrent>
+#include <QSvgRenderer>
 #include <QVector>
-#include <set>
 
 #include "GeoMapProvider.h"
 #include "GlobalObject.h"
 #include "GlobalSettings.h"
+#include "IconManager.h"
 #include "Navigator.h"
 #include "PositionProvider.h"
 #include "PositionInfo.h"
 #include "SideViewQuickItem.h"
+
+using Qt::Literals::StringLiterals::operator""_s;
 
 // Qt does not even provide this function...
 static bool pointInPolygon(const QGeoCoordinate& point, const QVector<QGeoCoordinate>& polygon) {
@@ -208,7 +210,7 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
     // Furthermore, we shift our coordinate system to the right to create
     // some space for the vertical scale.
     painter->scale(1, -1);
-    painter->translate(2 * padding + scaleWidth, -widgetHeight() + padding);
+    painter->translate(2 * padding + scaleWidth, -widgetHeight() + padding + textHeight);
 
     painter->setRenderHints(QPainter::TextAntialiasing | QPainter::Antialiasing);
 
@@ -229,15 +231,14 @@ void Ui::SideViewQuickItem::paint(QPainter *painter)
 
     painter->setClipping(false);
 
+    markPOI(painter);
     markWaypoints(painter);
 
     // TODO
-    // Test whether routes starting in an airspace work correctly.
     // Horizontal Scale?
     // Insert waypoints and waypoints along the way (?)
     // Plane symbol
     // Weather
-    // Zoom + Move
     // Show related position on map
     // NOTAM
     // Approach routes
@@ -778,8 +779,46 @@ Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBou
     return result;
 }
 
-void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
+QVector<Ui::SideViewQuickItem::POI> Ui::SideViewQuickItem::selectPOI() const {
+    QVector<POI> result;
 
+    result.append(POI(0, NOTAM::NOTAM()));
+
+    return result;
+}
+
+void Ui::SideViewQuickItem::markPOI(QPainter *painter) const {
+    /*icons.aerodrome()->draw(painter, QPoint(50, 50), Qt::AlignCenter);
+    icons.aerodromeGlider()->draw(painter, QPoint(80, 50), Qt::AlignCenter);
+    icons.aerodromeGrass()->draw(painter, QPoint(110, 50), Qt::AlignCenter);
+    icons.aerodromeInop()->draw(painter, QPoint(140, 50), Qt::AlignCenter);
+    icons.aerodromeMil()->draw(painter, QPoint(170, 50), Qt::AlignCenter);
+    icons.aerodromeMilGrass()->draw(painter, QPoint(200, 50), Qt::AlignCenter);
+    icons.aerodromeMilPaved()->draw(painter, QPoint(230, 50), Qt::AlignCenter);
+    icons.aerodromeUl()->draw(painter, QPoint(260, 50), Qt::AlignCenter);
+    icons.aerodromeWater()->draw(painter, QPoint(290, 50), Qt::AlignCenter);
+    icons.waypoint()->draw(painter, QPoint(320, 50), Qt::AlignCenter);
+    icons.waypointMRP()->draw(painter, QPoint(350, 50), Qt::AlignCenter);
+    icons.waypointRP()->draw(painter, QPoint(380, 50), Qt::AlignCenter);
+    icons.waypointDME()->draw(painter, QPoint(410, 50), Qt::AlignCenter);
+    icons.waypointNDB()->draw(painter, QPoint(440, 50), Qt::AlignCenter);
+    icons.waypointVOR()->draw(painter, QPoint(470, 50), Qt::AlignCenter);
+    icons.waypointVORDME()->draw(painter, QPoint(500, 50), Qt::AlignCenter);
+    icons.waypointVORTAC()->draw(painter, QPoint(530, 50), Qt::AlignCenter);
+    icons.notam()->draw(painter, QPoint(560, 50), Qt::AlignCenter);*/
+
+    for (const auto& poi : selectPOI()) {
+        if (std::holds_alternative<NOTAM::NOTAM>(poi._poi)) {
+            // TODO
+        } else if (std::holds_alternative<Weather::METAR>(poi._poi)) {
+            // TODO
+        } else if (std::holds_alternative<GeoMaps::Waypoint>(poi._poi)) {
+            // TODO
+        }
+    }
+}
+
+void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
     int m = 0;
     auto& last = route->waypoints().front();
 
@@ -792,11 +831,11 @@ void Ui::SideViewQuickItem::markWaypoints(QPainter *painter) const {
         painter->setPen(QColorConstants::Black);
         painter->drawLine(x, 0, x, profileHeight());
         painter->setPen(QColorConstants::White);
-        QFlags<Qt::AlignmentFlag> align = Qt::AlignBottom;
+        QFlags<Qt::AlignmentFlag> align = Qt::AlignTop;
         if (x < 20) align |= Qt::AlignLeft;
         else if (x > profileWidth() - 20) align |= Qt::AlignRight;
         else align |= Qt::AlignHCenter;
-        drawText(painter, x, profileHeight() + padding, label,
+        drawText(painter, x, -padding, label,
             QColorConstants::Black, true, align);
 
         last = wp;
@@ -857,7 +896,7 @@ int Ui::SideViewQuickItem::profileWidth() const
 
 int Ui::SideViewQuickItem::profileHeight() const
 {
-    return widgetHeight() - 2 * padding - textHeight;
+    return widgetHeight() - 2 * padding - 2 * textHeight;
 }
 
 Units::Distance Ui::SideViewQuickItem::pressureAltitude() {

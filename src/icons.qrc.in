@@ -112,5 +112,7 @@
 	<file alias="icons/waypoints/AD-GRASS.png">${CMAKE_SOURCE_DIR}/generatedSources/src/icons/waypoints/AD-GRASS.png</file>
 	<file alias="icons/waypoints/AD-MIL-GRASS.png">${CMAKE_SOURCE_DIR}/generatedSources/src/icons/waypoints/AD-MIL-GRASS.png</file>
 	<file alias="icons/waypoints/AD-UL.png">${CMAKE_SOURCE_DIR}/generatedSources/src/icons/waypoints/AD-UL.png</file>
+
+	<file alias="icons/NOTAM.svg">${CMAKE_SOURCE_DIR}/src/flightMap/sprites/NOTAM.svg</file>
     </qresource>
 </RCC>

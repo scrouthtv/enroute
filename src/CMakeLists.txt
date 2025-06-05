@@ -634,6 +634,8 @@ qt_add_qml_module(${PROJECT_NAME}
     SOURCES
     ui/AirspaceStyling.h
     ui/AirspaceStyling.cpp
+    ui/IconManager.h
+    ui/IconManager.cpp
     ui/ScaleQuickItem.h
     ui/ScaleQuickItem.cpp
     ui/SideViewQuickItem.h

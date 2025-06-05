@@ -20,15 +20,30 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
+#include <set>
+#include <variant>
+#include <vector>
+
+#include <QColor>
+#include <QGeoCoordinate>
 #include <QGeoShape>
 #include <QQmlEngine>
-#include <QtQuick/QQuickPaintedItem>
 #include <QMutex>
-#include <set>
+#include <QPainter>
+#include <QPoint>
+#include <QString>
+#include <QVector>
+
+#include <QtQuick/QQuickPaintedItem>
 
 #include "AirspaceStyling.h"
 #include "FlightRoute.h"
+#include "IconManager.h"
+#include "METAR.h"
+#include "NOTAM.h"
+#include "Waypoint.h"
 
 namespace Ui {
 
@@ -259,6 +274,26 @@ private:
   void drawAirspaces(QPainter *painter,
     const std::vector<AirspaceVerticalBorders>& borders);
 
+  class POI {
+   public:
+    POI(int trackM, const std::variant<NOTAM::NOTAM, Weather::METAR, GeoMaps::Waypoint>& poi)
+      : _trackM(trackM), _poi(poi) {}
+    int _trackM;
+    std::variant<NOTAM::NOTAM, Weather::METAR, GeoMaps::Waypoint> _poi;
+  };
+
+  /**
+   * \brief Select points of interest on the side view.
+   *
+   * Points of interest are:
+   *  - Relevant NOTAMs
+   *  - METAR / TAF along the route
+   *  - Airports
+   *
+   * Points are selected if they are at most 5 nm off the route.
+   */
+  QVector<POI> selectPOI() const;
+  void markPOI(QPainter *painter) const;
   void markWaypoints(QPainter *painter) const;
 
   /*! \brief Helper function to draw text.
@@ -281,6 +316,8 @@ private:
 
   Units::Distance pressureAltitude();
   Q_DISABLE_COPY_MOVE(SideViewQuickItem)
+
+  const IconManager icons;
 };
 
 } // namespace Ui

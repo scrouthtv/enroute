@@ -37,9 +37,9 @@ ColumnLayout {
     SideView {
         id: sideView
         Layout.fillWidth: true
-        // Size consists of main view + 2 * 5px padding + 20px space for text
-        // over the view.
-        Layout.preferredHeight: 130
+        // Size consists of main view + 2 * 5px padding + 2 * 20px
+        // space for text over / under the view.
+        Layout.preferredHeight: 150
     }
 
     Rectangle {
