@@ -276,10 +276,11 @@ private:
 
   class POI {
    public:
-    POI(int trackM, const std::variant<NOTAM::NOTAM, Weather::METAR, GeoMaps::Waypoint>& poi)
-      : _trackM(trackM), _poi(poi) {}
+    POI(int trackM, int offset, const std::variant<NOTAM::NOTAM, Weather::METAR>& poi)
+      : _trackM(trackM), _offset(offset), _poi(poi) {}
     int _trackM;
-    std::variant<NOTAM::NOTAM, Weather::METAR, GeoMaps::Waypoint> _poi;
+    int _offset;
+    std::variant<NOTAM::NOTAM, Weather::METAR> _poi;
   };
 
   /**
@@ -293,8 +294,10 @@ private:
    * Points are selected if they are at most 5 nm off the route.
    */
   QVector<POI> selectPOI() const;
+  QVector<Weather::METAR> selectMetar() const;
   void markPOI(QPainter *painter) const;
   void markWaypoints(QPainter *painter) const;
+  static const int maxMetarOffset = 10000;  // in meter
 
   /*! \brief Helper function to draw text.
    *

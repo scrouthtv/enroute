@@ -172,6 +172,14 @@ public:
      */
     Q_PROPERTY(Units::Pressure QNH READ QNH CONSTANT)
 
+    /*! \brief Wind speed in this METAR.
+     */
+    Q_PROPERTY(Units::Speed windSpeed READ windSpeed CONSTANT)
+
+    /*! \brief Wind direction in this METAR.
+     */
+    Q_PROPERTY(int windDirection READ windDirection CONSTANT)
+
     /*! \brief Raw METAR text
      *
      * This is a string such as "METAR EICK 092100Z 23007KT 9999 FEW038 BKN180
@@ -245,6 +253,16 @@ public:
     [[nodiscard]] Units::Pressure QNH() const
     {
         return m_qnh;
+    }
+
+    [[nodiscard]] Units::Speed windSpeed() const
+    {
+        return m_wind;
+    }
+
+    [[nodiscard]] int windDirection() const
+    {
+        return m_windDirection;
     }
 
     /*! \brief Getter function for property with the same name
@@ -339,6 +357,9 @@ private:
 
     // Dewpoint, as returned by the Aviation Weather Center
     Units::Temperature m_dewpoint;
+
+    // Wind direction in degrees, as returned by the Aviation Weather Center
+    int m_windDirection = -1;
 
     // Density altitude, derived data
     Units::Distance m_densityAltitude;

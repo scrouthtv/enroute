@@ -132,6 +132,12 @@ Weather::METAR::METAR(QXmlStreamReader& xml)
             continue;
         }
 
+        if (xml.isStartElement() && name == u"wind_dir_degrees"_s)
+        {
+            m_windDirection = xml.readElementText().toInt();
+            continue;
+        }
+
         if (xml.isEndElement() && name == u"METAR"_s)
         {
             break;

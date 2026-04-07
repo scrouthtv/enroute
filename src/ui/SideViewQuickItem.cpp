@@ -18,6 +18,7 @@
  *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
+#include <QtMath>
 #include <QBrush>
 #include <QDebug>
 #include <QElapsedTimer>
@@ -36,6 +37,8 @@
 #include <QSvgRenderer>
 #include <QVector>
 
+#include "../3rdParty/metaf/include/metaf.hpp"
+
 #include "GeoMapProvider.h"
 #include "GlobalObject.h"
 #include "GlobalSettings.h"
@@ -44,6 +47,7 @@
 #include "PositionProvider.h"
 #include "PositionInfo.h"
 #include "SideViewQuickItem.h"
+#include "WeatherDataProvider.h"
 
 using Qt::Literals::StringLiterals::operator""_s;
 
@@ -76,6 +80,24 @@ static bool pointInPolygon(const QGeoCoordinate& point, const QVector<QGeoCoordi
     }
 
     return inside;
+}
+
+static QGeoCoordinate projectPointOnLine(const QGeoCoordinate& a,
+        const QGeoCoordinate& b, const QGeoCoordinate& poi) {
+    // https://stackoverflow.com/a/64330724
+    const double abx = b.longitude() - a.longitude();
+    const double aby = b.latitude() - a.latitude();
+    const double acx = poi.longitude() - a.longitude();
+    const double acy = poi.latitude() - a.latitude();
+    const double dot = (abx * acx + aby * acy) / (abx * abx + aby * aby);
+    const double px = a.longitude() + dot * abx;
+    const double py = a.latitude() + dot * aby;
+    return QGeoCoordinate(px, py);
+}
+
+static QPointF relativePoint(const QPointF& pt, const int deg, const float dist) {
+    const QPointF rel(qSin(deg * M_PI / 180.0) * dist, qCos(deg * M_PI / 180.0) * dist);
+    return pt + rel;
 }
 
 Ui::SideViewQuickItem::SideViewQuickItem(QQuickItem *parent)
@@ -779,10 +801,68 @@ Ui::SideViewQuickItem::visibleRouteSection(const QVector<QGeoCoordinate>& mapBou
     return result;
 }
 
-QVector<Ui::SideViewQuickItem::POI> Ui::SideViewQuickItem::selectPOI() const {
-    QVector<POI> result;
+QVector<Weather::METAR> Ui::SideViewQuickItem::selectMetar() const {
+    QVector<Weather::METAR> result;
+    QGeoRectangle bounds = route->boundingRectangle();
 
-    result.append(POI(0, NOTAM::NOTAM()));
+    // Increase the bounding box by maxMetarOffset.
+    // We are technically increasing by too much as degrees are smaller when
+    // not at the equator. However, I don't care, as we will filter reports
+    // that are too far off the route anyways.
+    const double offsetDegs = maxMetarOffset / 1000.0 / 1.852 / 60.0;
+    QGeoCoordinate tl = bounds.topLeft();
+    tl.setLongitude(tl.longitude() - offsetDegs);
+    tl.setLatitude(tl.latitude() + offsetDegs);
+    QGeoCoordinate br = bounds.bottomRight();
+    br.setLongitude(br.longitude() + offsetDegs);
+    br.setLatitude(br.latitude() - offsetDegs);
+    bounds = QGeoRectangle(tl, br);
+
+    for (const auto& m : GlobalObject::weatherDataProvider()->METARs()) {
+        if (m.isValid() && bounds.contains(m.coordinate()))
+            result.append(m);
+    }
+
+    return result;
+}
+
+QVector<Ui::SideViewQuickItem::POI> Ui::SideViewQuickItem::selectPOI() const {
+    QVector<Weather::METAR> potentialM;
+    QVector<Ui::SideViewQuickItem::POI> result;
+
+    potentialM.append(selectMetar());
+    result.reserve(potentialM.size());
+
+    const auto& wp = route->waypoints();
+
+    // Find out where to draw the poi along the route.
+    // -> Check where it is closest along a leg / closest to a waypoint.
+    for (const auto& m : potentialM) {
+        if (!m.isValid() || m.expiration() < QDateTime::currentDateTime()) continue;
+
+        Ui::SideViewQuickItem::POI poi(0, wp.front().coordinate().distanceTo(m.coordinate()), m);
+
+        auto it = wp.cbegin();
+        int trackm = 0;
+        while (++it != wp.cend()) {
+            const auto projection = projectPointOnLine((it - 1)->coordinate(),
+                it->coordinate(), m.coordinate());
+            const double distance = projection.distanceTo(m.coordinate());
+            if (distance < poi._offset) {
+                poi._offset = distance;
+                poi._trackM = trackm + projection.distanceTo((it - 1)->coordinate());
+            }
+
+            trackm += it->coordinate().distanceTo((it - 1)->coordinate());
+
+            if (it->coordinate().distanceTo(m.coordinate()) < poi._offset) {
+                poi._offset = it->coordinate().distanceTo(m.coordinate());
+                poi._trackM = trackm;
+            }
+        }
+
+        if (poi._offset <= maxMetarOffset) result.push_back(poi);
+    }
 
     return result;
 }
@@ -807,13 +887,77 @@ void Ui::SideViewQuickItem::markPOI(QPainter *painter) const {
     icons.waypointVORTAC()->draw(painter, QPoint(530, 50), Qt::AlignCenter);
     icons.notam()->draw(painter, QPoint(560, 50), Qt::AlignCenter);*/
 
+    const int y = profileHeight() + textHeight/2;
+
     for (const auto& poi : selectPOI()) {
         if (std::holds_alternative<NOTAM::NOTAM>(poi._poi)) {
             // TODO
         } else if (std::holds_alternative<Weather::METAR>(poi._poi)) {
-            // TODO
-        } else if (std::holds_alternative<GeoMaps::Waypoint>(poi._poi)) {
-            // TODO
+            const Weather::METAR& m = std::get<Weather::METAR>(poi._poi);
+            // Weather::METAR has very little information, e.g. no cloud information.
+            // Currently we use wind information to draw a wind symbol, but in the future
+            // it would be nice to have cloud cover as well.
+
+            qDebug() << "METAR " << m.ICAOCode();
+
+            int x = (poi._trackM - hMeter0) / hMeterPerPx;
+            if (x < 0 || x >= profileWidth()) continue;
+
+            // Align the left / right ones to inside the border:
+            if (x < textHeight/2) x = textHeight/2;
+            if (x > profileWidth() - textHeight/2) x = profileWidth() - textHeight/2;
+
+            qDebug() << "Weather at" << m.ICAOCode();
+            const int dir = m.windDirection();
+            int speed = m.windSpeed().toKN();
+            qDebug() << dir << "deg / " << speed << " kts";
+
+            if (dir == -1) continue;
+
+            // Draw METAR:
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(m.flightCategoryColor());
+            painter->drawRect(x - textHeight/2, y - textHeight/2, textHeight, textHeight);
+
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QColorConstants::Black);
+            painter->drawEllipse(x - 2, y - 2, 4, 4);
+
+            // Draw vane:
+            const QPointF start = relativePoint(QPointF(x, y), dir, 2);
+            const QPointF end = relativePoint(QPointF(x, y), dir, textHeight/2);
+            painter->drawLine(start, end);
+
+            int dist = textHeight/2 - 2;
+            if (speed >= 0 /* 48 */) {
+                qDebug() << "50 kts";
+                // Fill triangle:
+                const QPointF a = relativePoint(start, dir, dist);
+                const QPointF b = relativePoint(start, dir, dist - 2);
+                const QPointF center = relativePoint(start, dir, dist - 1);
+                const QPointF tip = relativePoint(center, dir + 90, 4);
+                painter->setBrush(QColorConstants::Black);
+                painter->drawConvexPolygon(QPolygonF({a, b, tip}));
+                painter->setBrush(Qt::NoBrush);
+                //speed -= 50;
+                dist -= 5;
+            }
+
+            while (speed >= 9) {
+                qDebug() << "+ 10 kts";
+                const QPointF a = relativePoint(start, dir, dist);
+                const QPointF b = relativePoint(a, dir + 76, 4);
+                painter->drawLine(a, b);
+                dist -= 2;
+                speed -= 10;
+            }
+
+            if (speed >= 4) {
+                qDebug() << "+ 5 kts";
+                const QPointF a = relativePoint(start, dir, dist);
+                const QPointF b = relativePoint(a, dir + 76, 2);
+                painter->drawLine(a, b);
+            }
         }
     }
 }
